@@ -226,6 +226,26 @@ void main() {
       expect(result, contains(', includeIfNull: false'));
     });
 
+    test('Should generate includeIfNull: true for spec-nullable fields even when option is false', () {
+      final propertyEntryMap = SwaggerSchema(originalRef: 'Pet', isNullable: true);
+      const propertyName = 'shipDate';
+      final result = SwaggerModelsGeneratorV3(GeneratorOptions(
+        inputFolder: '',
+        outputFolder: '',
+        includeIfNull: false,
+      )).generatePropertyContentByDefault(
+        prop: propertyEntryMap,
+        propertyName: propertyName,
+        propertyKey: propertyName,
+        allEnumNames: [],
+        allEnumListNames: [],
+        requiredProperties: [],
+        isDeprecated: false,
+      );
+
+      expect(result, contains(', includeIfNull: true'));
+    });
+
     test('Should NOT generate includeIfNull if option is false', () {
       final propertyEntryMap = SwaggerSchema(originalRef: 'Pet');
       const propertyName = 'shipDate';
