@@ -664,7 +664,13 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
       if (definedParameters.containsValue(parameter)) {
         final neededKey =
             definedParameters.entries.firstWhereOrNull((e) => e.value == parameter)?.key ?? '';
-        return getValidatedClassName(neededKey).asEnum();
+        final enumName = getValidatedClassName(neededKey).asEnum();
+
+        if (parameter.type == kArray || parameter.schema?.type == kArray) {
+          return enumName.asList();
+        }
+
+        return enumName;
       }
 
       if (parameter.type == kArray || parameter.schema?.type == kArray) {
