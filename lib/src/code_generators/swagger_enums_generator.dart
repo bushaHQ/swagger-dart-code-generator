@@ -133,15 +133,19 @@ ${allEnums.map((e) => e.toString()).join('\n')}
     definedParameters.addAll(swaggerRoot.components?.parameters ?? {});
 
     definedParameters.forEach((key, swaggerRequestParameter) {
-      final enumValues = swaggerRequestParameter.schema?.enumValues ??
-          swaggerRequestParameter.items?.enumValues ??
-          swaggerRequestParameter.enumValues;
+      final enumValues = _firstNonEmpty([
+        swaggerRequestParameter.schema?.enumValues,
+        swaggerRequestParameter.schema?.items?.enumValues,
+        swaggerRequestParameter.items?.enumValues,
+        swaggerRequestParameter.enumValues,
+      ]);
 
       final enumNames = swaggerRequestParameter.schema?.enumNames ?? [];
 
       final isInteger =
           kIntegerTypes.contains(swaggerRequestParameter.schema?.type) ||
-              kIntegerTypes.contains(swaggerRequestParameter.items?.type);
+              kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
+              kIntegerTypes.contains(swaggerRequestParameter.schema?.items?.type);
 
       if (enumValues.isNotEmpty &&
           swaggerRoot.components?.schemas.containsKey(key) != true) {
@@ -197,16 +201,19 @@ ${allEnums.map((e) => e.toString()).join('\n')}
           if (swaggerRequestParameter.enumValues.isNotEmpty) {
             enumValues = swaggerRequestParameter.enumValues;
           } else {
-            enumValues = swaggerRequestParameter.schema?.enumValues ??
-                swaggerRequestParameter.items?.enumValues ??
-                [];
+            enumValues = _firstNonEmpty([
+              swaggerRequestParameter.schema?.enumValues,
+              swaggerRequestParameter.schema?.items?.enumValues,
+              swaggerRequestParameter.items?.enumValues,
+            ]);
           }
 
           final enumNames = swaggerRequestParameter.schema?.enumNames ?? [];
 
           final isInteger =
               kIntegerTypes.contains(swaggerRequestParameter.schema?.type) ||
-                  kIntegerTypes.contains(swaggerRequestParameter.items?.type);
+                  kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
+              kIntegerTypes.contains(swaggerRequestParameter.schema?.items?.type);
 
           if (enumValues.isNotEmpty) {
             final enumContent = EnumModel(
@@ -406,3 +413,6 @@ extension Unique<E, Id> on List<E> {
     return list;
   }
 }
+
+List<String> _firstNonEmpty(List<List<String>?> candidates) =>
+    candidates.firstWhere((values) => values?.isNotEmpty == true, orElse: () => const []) ?? const [];
