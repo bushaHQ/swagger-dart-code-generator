@@ -243,10 +243,22 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
             ..defaultTo = _getDefaultMetaDataValue(swaggerRequest),
         );
 
+        final commaSeparatedParameters = _getCommaSeparatedQueryParameterNames(
+          swaggerRequest: swaggerRequest,
+          swaggerPath: swaggerPath,
+          root: swaggerRoot,
+        );
+
         final privateMethod = _getPrivateMethod(
           (method.toBuilder()..optionalParameters.add(metaDataParameter)).build(),
+          commaSeparatedParameters,
         );
-        final publicMethod = _getPublicMethod(method, allModels, swaggerRequest.deprecated);
+        final publicMethod = _getPublicMethod(
+          method,
+          allModels,
+          swaggerRequest.deprecated,
+          commaSeparatedParameters,
+        );
         methods.addAll([publicMethod, privateMethod]);
       });
     });
@@ -379,7 +391,29 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     return true;
   }
 
-  Method _getPrivateMethod(Method method) {
+  Set<String> _getCommaSeparatedQueryParameterNames({
+    required SwaggerRequest swaggerRequest,
+    required SwaggerPath swaggerPath,
+    required SwaggerRoot root,
+  }) {
+    final definedParameters = <String, SwaggerRequestParameter>{
+      ...root.parameters,
+      ...?root.components?.parameters,
+    };
+
+    return [...swaggerRequest.parameters, ...swaggerPath.parameters]
+        .map((par) => definedParameters[par.ref.split('/').last] ?? par)
+        .where(
+          (parameter) =>
+              parameter.inParameter == kQuery &&
+              (parameter.type == kArray || parameter.schema?.type == kArray) &&
+              parameter.isCommaSeparatedList,
+        )
+        .map((parameter) => parameter.name.asParameterName())
+        .toSet();
+  }
+
+  Method _getPrivateMethod(Method method, Set<String> commaSeparatedParameters) {
     final parameters = method.optionalParameters.map((p) {
       Parameter result = p;
 
@@ -410,6 +444,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         }
       }
 
+      if (commaSeparatedParameters.contains(p.name)) {
+        result = result.copyWith(type: Reference('String?'));
+      }
+
       return result;
     });
 
@@ -423,7 +461,12 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     );
   }
 
-  Method _getPublicMethod(Method method, List<String> allModels, bool isDeprecated) {
+  Method _getPublicMethod(
+    Method method,
+    List<String> allModels,
+    bool isDeprecated,
+    Set<String> commaSeparatedParameters,
+  ) {
     final parameters = method.optionalParameters.map((p) => p.copyWith(annotations: []));
 
     return Method(
@@ -433,7 +476,12 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         ..name = method.name
         ..returns = method.returns
         ..annotations.addAll([if (isDeprecated) refer('deprecated')])
-        ..body = _generatePublicMethodCode(method.optionalParameters, method.name!, allModels),
+        ..body = _generatePublicMethodCode(
+          method.optionalParameters,
+          method.name!,
+          allModels,
+          commaSeparatedParameters,
+        ),
     );
   }
 
@@ -441,9 +489,19 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     Iterable<Parameter> parameters,
     String publicMethodName,
     List<String> allModels,
+    Set<String> commaSeparatedParameters,
   ) {
     final parametersListString = parameters
         .map((p) {
+          if (commaSeparatedParameters.contains(p.name)) {
+            final typeName = p.type!.symbol!;
+            final joined = typeName.startsWith('List<enums.')
+                ? '${typeName.substring(11, typeName.length - 2).camelCase}ExplodedListToJson(${p.name})'
+                : "${p.name}.join(',')";
+
+            return '${p.name} : ${p.name} == null || ${p.name}.isEmpty ? null : $joined';
+          }
+
           if (p.type!.symbol!.startsWith('enums.')) {
             return '${p.name} : ${p.name}?.value?.toString()';
           }
@@ -601,6 +659,7 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
 
     if (parameter.items?.enumValues.isNotEmpty == true ||
         parameter.schema?.enumValues.isNotEmpty == true ||
+        parameter.schema?.items?.enumValues.isNotEmpty == true ||
         parameter.enumValues.isNotEmpty) {
       if (definedParameters.containsValue(parameter)) {
         final neededKey =
