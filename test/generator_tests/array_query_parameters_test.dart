@@ -79,7 +79,7 @@ void main() {
     });
 
     test('joins form lists with explode false into one comma-separated query value', () {
-      expect(requests, contains("type : type == null || type.isEmpty ? null : v1PairsGetTypeExplodedListToJson(type)"));
+      expect(requests, contains('type : v1PairsGetTypeExplodedListToJson(type)'));
       expect(requests, contains("currency : currency == null || currency.isEmpty ? null : currency.join(',')"));
       expect(requests, contains("@Query('type') String? type"));
       expect(requests, contains("@Query('currency') String? currency"));
@@ -88,15 +88,21 @@ void main() {
     test('types a referenced component array parameter as a list of its enum', () {
       expect(enums.map((e) => e.name), contains('StatusParam'));
       expect(requests, contains('List<enums.StatusParam>? status'));
-      expect(
-        requests,
-        contains('status : status == null || status.isEmpty ? null : statusParamExplodedListToJson(status)'),
-      );
+      expect(requests, contains('status : statusParamExplodedListToJson(status)'));
     });
 
     test('keeps exploded lists as repeated query values', () {
       expect(requests, contains('side : v1PairsGetSideListToJson(side)'));
       expect(requests, contains("@Query('side') List<Object?>? side"));
+    });
+
+    test('skips values without a wire value when serializing enum lists', () {
+      final helpers = enums.firstWhere((e) => e.name == 'V1PairsGetType').generateFromJsonToJson();
+
+      expect(helpers, isNot(contains('value!')));
+      expect(helpers, contains('String? v1PairsGetTypeExplodedListToJson('));
+      expect(helpers, contains('.map((e) => e.value).whereType<String>()'));
+      expect(helpers, contains("return values.isEmpty ? null : values.join(',');"));
     });
   });
 }

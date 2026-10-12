@@ -495,11 +495,11 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         .map((p) {
           if (commaSeparatedParameters.contains(p.name)) {
             final typeName = p.type!.symbol!;
-            final joined = typeName.startsWith('List<enums.')
-                ? '${typeName.substring(11, typeName.length - 2).camelCase}ExplodedListToJson(${p.name})'
-                : "${p.name}.join(',')";
+            if (typeName.startsWith('List<enums.')) {
+              return '${p.name} : ${typeName.substring(11, typeName.length - 2).camelCase}ExplodedListToJson(${p.name})';
+            }
 
-            return '${p.name} : ${p.name} == null || ${p.name}.isEmpty ? null : $joined';
+            return "${p.name} : ${p.name} == null || ${p.name}.isEmpty ? null : ${p.name}.join(',')";
           }
 
           if (p.type!.symbol!.startsWith('enums.')) {
