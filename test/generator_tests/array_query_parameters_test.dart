@@ -8,6 +8,19 @@ const _pairsService = '''
 {
   "openapi": "3.0.1",
   "info": {"title": "Pairs", "version": "1.0.0"},
+  "components": {
+    "parameters": {
+      "StatusParam": {
+        "name": "status",
+        "in": "query",
+        "explode": false,
+        "schema": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["active", "paused"]}
+        }
+      }
+    }
+  },
   "paths": {
     "/v1/pairs": {
       "get": {
@@ -29,6 +42,7 @@ const _pairsService = '''
             "explode": false,
             "schema": {"type": "array", "items": {"type": "string"}}
           },
+          {"\$ref": "#/components/parameters/StatusParam"},
           {
             "name": "side",
             "in": "query",
@@ -69,6 +83,15 @@ void main() {
       expect(requests, contains("currency : currency == null || currency.isEmpty ? null : currency.join(',')"));
       expect(requests, contains("@Query('type') String? type"));
       expect(requests, contains("@Query('currency') String? currency"));
+    });
+
+    test('types a referenced component array parameter as a list of its enum', () {
+      expect(enums.map((e) => e.name), contains('StatusParam'));
+      expect(requests, contains('List<enums.StatusParam>? status'));
+      expect(
+        requests,
+        contains('status : status == null || status.isEmpty ? null : statusParamExplodedListToJson(status)'),
+      );
     });
 
     test('keeps exploded lists as repeated query values', () {
