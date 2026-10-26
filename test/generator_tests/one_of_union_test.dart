@@ -349,6 +349,118 @@ void main() {
       );
     });
 
+    test('matches string and integer branches by their enum values', () {
+      final result = generate(
+        specWith({
+          'oneOf': [
+            {'type': 'string'},
+            {
+              'type': 'string',
+              'enum': ['card', "it's \$5"],
+            },
+            {
+              'type': 'integer',
+              'enum': [1, 2],
+            },
+          ],
+        }),
+      );
+
+      final enumString = result.indexOf(
+        "final String json when const {'card', 'it\\'s \\\$5'}.contains(json) => Holder\$Data\$String2(json),",
+      );
+      final anyString = result.indexOf(
+        'final String json => Holder\$Data\$String1(json),',
+      );
+      expect(enumString, isNonNegative);
+      expect(anyString, greaterThan(enumString));
+      expect(
+        result,
+        contains(
+          'final int json when const {1, 2}.contains(json) => Holder\$Data\$Integer(json),',
+        ),
+      );
+    });
+
+    test('warns about branches that can never be matched', () {
+      expect(
+        () => generate(
+          specWith({
+            'oneOf': [
+              {'type': 'string'},
+              {'type': 'string'},
+              {
+                'type': 'object',
+                'properties': {
+                  'a': {'type': 'string'},
+                },
+              },
+              {
+                'type': 'object',
+                'properties': {
+                  'b': {'type': 'string'},
+                },
+              },
+            ],
+          }),
+        ),
+        prints(
+          allOf(
+            contains('[WARNING] oneOf Holder\$Data:'),
+            contains('Holder\$Data\$Object2'),
+            contains('Holder\$Data\$String2'),
+          ),
+        ),
+      );
+    });
+
+    test('does not warn when every branch can be matched', () {
+      expect(
+        () => generate(
+          specWith({
+            'oneOf': [
+              account,
+              {'type': 'array', 'items': account},
+            ],
+          }),
+        ),
+        prints(isEmpty),
+      );
+    });
+
+    test('names variants of a property with a reserved name', () {
+      final result = generate({
+        'openapi': '3.0.0',
+        'info': {'title': 'test', 'version': '1'},
+        'paths': {},
+        'components': {
+          'schemas': {
+            'Holder': {
+              'type': 'object',
+              'properties': {
+                'method': {
+                  'oneOf': [
+                    {'type': 'string'},
+                    {'type': 'integer'},
+                  ],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result, contains('final Holder\$Method\$? method;'));
+      expect(
+        result,
+        contains(
+          'final class Holder\$Method\$String extends Holder\$Method\$ {',
+        ),
+      );
+      expect(result, contains('_ => Holder\$Method\$Unknown(json),'));
+      expect(result, isNot(contains('\$\$')));
+    });
+
     test('keeps the property dynamic when a branch cannot be typed', () {
       final result = generate(
         specWith({

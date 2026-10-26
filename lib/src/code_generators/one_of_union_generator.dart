@@ -17,6 +17,7 @@ class OneOfVariant {
     required this.requiredKeys,
     required this.discriminatorValue,
     required this.elementType,
+    this.allowedValues = const [],
   });
 
   /// The generated subclass of the union that holds this branch.
@@ -42,6 +43,10 @@ class OneOfVariant {
   /// The type every item of a JSON array, or every value of a JSON object
   /// used as a map, must have to match this branch.
   final String? elementType;
+
+  /// Dart literals of the only values a string or integer branch accepts,
+  /// from its `enum`.
+  final List<String> allowedValues;
 }
 
 /// A `oneOf` schema resolved to a sealed union.
@@ -51,9 +56,13 @@ class OneOfUnion {
     required this.variants,
     required this.innerClasses,
     required this.discriminatorProperty,
+    required this.unknownClassName,
   });
 
   final String className;
+
+  /// The subclass holding JSON that matches no branch.
+  final String unknownClassName;
   final List<OneOfVariant> variants;
 
   /// Inline object schemas used by the variants, keyed by the class name they
@@ -245,7 +254,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       final variant = _resolveVariant(
         branch: schema.oneOf[i],
         shape: shape,
-        variantClassName: '$unionName\$$kind',
+        variantClassName: _className('$unionKey\$$kind'),
         innerKey: '$unionKey\$$kind',
         innerClasses: innerClasses,
         discriminator: discriminator,
@@ -261,6 +270,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       variants: variants,
       innerClasses: innerClasses,
       discriminatorProperty: discriminator?.property,
+      unknownClassName: _className('$unionKey\$$_unknown'),
     );
   }
 
@@ -293,23 +303,36 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     final name = union.className;
 
     final cases = <String>[];
+    final unreachable = <String>[];
     for (final shape in OneOfShape.values) {
       final variants = union.variants.where((v) => v.shape == shape).toList()
         ..sort((a, b) => _guardWeight(b, union) - _guardWeight(a, union));
 
+      final guards = <String>{};
+      var matchesEverything = false;
       for (final variant in variants) {
         final guard = _guard(variant, union, ambiguous: variants.length > 1);
+        if (matchesEverything || !guards.add(guard)) {
+          unreachable.add(variant.className);
+          continue;
+        }
         cases.add(
           '    final ${_shapePatterns[shape]} json${guard.isEmpty ? '' : ' when $guard'} => ${variant.className}(${variant.fromJson}),',
         );
-        if (guard.isEmpty) {
-          break;
-        }
+        matchesEverything = guard.isEmpty;
       }
     }
 
+    if (unreachable.isNotEmpty) {
+      print(
+        '[WARNING] oneOf $name: ${unreachable.join(', ')} can never be matched, '
+        'because an earlier branch of the same JSON shape accepts the same values. '
+        'Add a discriminator, or required keys or enum values that tell the branches apart.',
+      );
+    }
+
     final unknown = OneOfVariant(
-      className: '$name\$$_unknown',
+      className: union.unknownClassName,
       shape: OneOfShape.map,
       valueType: 'Object?',
       fromJson: 'json',
@@ -362,7 +385,7 @@ sealed class $name {
 
   factory $name.fromJson(Object? json) => switch (json) {
 ${cases.join('\n')}
-    _ => $name\$$_unknown(json),
+    _ => ${union.unknownClassName}(json),
   };
 
   static const fromJsonFactory = $name.fromJson;
@@ -388,7 +411,7 @@ $variantClasses''';
       return null;
     }
 
-    if (branch.isEnum && branch.type != 'string') {
+    if (branch.isEnum && branch.type != 'string' && branch.type != 'integer') {
       return null;
     }
 
@@ -426,6 +449,7 @@ $variantClasses''';
       List<String> requiredKeys = const [],
       String? discriminatorValue,
       String? elementType,
+      List<String> allowedValues = const [],
     }) => OneOfVariant(
       className: variantClassName,
       shape: shape,
@@ -435,6 +459,7 @@ $variantClasses''';
       requiredKeys: requiredKeys,
       discriminatorValue: discriminatorValue,
       elementType: elementType,
+      allowedValues: allowedValues,
     );
 
     switch (shape) {
@@ -541,9 +566,25 @@ $variantClasses''';
         return null;
 
       case OneOfShape.string:
-        return variant(valueType: 'String', fromJson: 'json', toJson: 'value');
+        return variant(
+          valueType: 'String',
+          fromJson: 'json',
+          toJson: 'value',
+          allowedValues: [
+            for (final value in branch.enumValuesObj)
+              if (value is String) _stringLiteral(value),
+          ],
+        );
       case OneOfShape.integer:
-        return variant(valueType: 'int', fromJson: 'json', toJson: 'value');
+        return variant(
+          valueType: 'int',
+          fromJson: 'json',
+          toJson: 'value',
+          allowedValues: [
+            for (final value in branch.enumValuesObj)
+              if (value is int) '$value',
+          ],
+        );
       case OneOfShape.number:
         return variant(
           valueType: 'double',
@@ -573,6 +614,8 @@ $variantClasses''';
           "json['$property'] == '${variant.discriminatorValue}'"
         else
           for (final key in variant.requiredKeys) "json.containsKey('$key')",
+      if (variant.allowedValues.isNotEmpty)
+        'const {${variant.allowedValues.join(', ')}}.contains(json)',
       if (variant.elementType case final type?)
         switch (variant.shape) {
           OneOfShape.list => 'json.every((item) => item is $type)',
@@ -588,7 +631,8 @@ $variantClasses''';
       return 1 << 20;
     }
     return variant.requiredKeys.length * 2 +
-        (variant.elementType == null ? 0 : 1);
+        (variant.elementType == null ? 0 : 1) +
+        (variant.allowedValues.isEmpty ? 0 : 1);
   }
 
   SwaggerSchema? _resolveRef(String ref) {
@@ -612,6 +656,16 @@ $variantClasses''';
     'boolean' => 'bool',
     _ => null,
   };
+
+  /// [value] as a single-quoted Dart string literal.
+  String _stringLiteral(String value) {
+    final escaped = value
+        .replaceAll(r'\', r'\\')
+        .replaceAll("'", r"\'")
+        .replaceAll(r'$', r'\$')
+        .replaceAll('\n', r'\n');
+    return "'$escaped'";
+  }
 
   /// The type a JSON value has before it is converted to the basic [type].
   String _elementType(String type) => type == 'double' ? 'num' : type;
