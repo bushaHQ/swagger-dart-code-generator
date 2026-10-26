@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:swagger_dart_code_generator/src/code_generators/v3/swagger_enums_generator_v3.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v3/swagger_models_generator_v3.dart';
 import 'package:swagger_dart_code_generator/src/models/generator_options.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart';
@@ -125,6 +126,41 @@ void main() {
       expect(accountNumber, greaterThan(iban));
     });
 
+    test('matches arrays by the type of their items', () {
+      final result = generate(
+        specWith(
+          {
+            'oneOf': [
+              {
+                'type': 'array',
+                'items': {'type': 'number'},
+              },
+              {
+                'type': 'array',
+                'items': {r'$ref': '#/components/schemas/Card'},
+              },
+            ],
+          },
+          schemas: {'Card': account},
+        ),
+      );
+
+      expect(
+        result,
+        contains(
+          'final List<dynamic> json when json.every((item) => item is num) => '
+          'Holder\$Data\$Array1([for (final item in json) (item as num).toDouble()]),',
+        ),
+      );
+      expect(
+        result,
+        contains(
+          'final List<dynamic> json when json.every((item) => item is Map<String, dynamic>) => '
+          'Holder\$Data\$Array2([for (final item in json) Card.fromJson(item as Map<String, dynamic>)]),',
+        ),
+      );
+    });
+
     test('types a string or a map of strings', () {
       final result = generate(
         specWith({
@@ -180,6 +216,60 @@ void main() {
           "final Map<String, dynamic> json when json['kind'] == 'Bank' => Holder\$Data\$Object2(Bank.fromJson(json)),",
         ),
       );
+    });
+
+    test('generates the enums used inside inline branches', () {
+      final account = {
+        'type': 'object',
+        'properties': {
+          'payment_meta': {
+            'type': 'object',
+            'properties': {
+              'payment_methods': {
+                'type': 'array',
+                'items': {
+                  'type': 'string',
+                  'enum': ['bank_transfer', 'card'],
+                },
+              },
+            },
+          },
+        },
+      };
+      final spec = jsonEncode(
+        specWith({
+          'oneOf': [
+            account,
+            {'type': 'array', 'items': account},
+          ],
+        }),
+      );
+      final options = GeneratorOptions(
+        inputFolder: '',
+        outputFolder: '',
+        generateOneOfUnions: true,
+      );
+
+      final enums = SwaggerEnumsGeneratorV3(
+        options,
+      ).generateAllEnums(root: SwaggerRoot.parse(spec), fileName: 'fileName');
+      final models = SwaggerModelsGeneratorV3(options).generate(
+        root: SwaggerRoot.parse(spec),
+        fileName: 'fileName',
+        allEnums: enums,
+      );
+
+      final referenced = RegExp(
+        r'enums\.([A-Za-z0-9_$]+)',
+      ).allMatches(models).map((match) => match.group(1)).toSet();
+      expect(
+        referenced,
+        containsAll([
+          'Holder\$Data\$Object\$Value\$PaymentMetaPaymentMethods',
+          'Holder\$Data\$Array\$Item\$PaymentMetaPaymentMethods',
+        ]),
+      );
+      expect(enums.map((e) => e.name), containsAll(referenced));
     });
 
     test('keeps the property dynamic when a branch cannot be typed', () {

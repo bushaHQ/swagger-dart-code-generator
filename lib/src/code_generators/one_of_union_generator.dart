@@ -15,6 +15,7 @@ class OneOfVariant {
     required this.toJson,
     required this.requiredKeys,
     required this.discriminatorValue,
+    required this.itemCheck,
   });
 
   /// The generated subclass of the union that holds this branch.
@@ -36,6 +37,9 @@ class OneOfVariant {
   /// The discriminator value that selects this branch, when the `oneOf`
   /// declares a discriminator.
   final String? discriminatorValue;
+
+  /// Type test every `item` of a JSON array must pass to match this branch.
+  final String? itemCheck;
 }
 
 /// A `oneOf` schema resolved to a sealed union.
@@ -263,6 +267,7 @@ $variantClasses''';
       required String toJson,
       List<String> requiredKeys = const [],
       String? discriminatorValue,
+      String? itemCheck,
     }) => OneOfVariant(
       className: variantClassName,
       shape: shape,
@@ -271,6 +276,7 @@ $variantClasses''';
       toJson: toJson,
       requiredKeys: requiredKeys,
       discriminatorValue: discriminatorValue,
+      itemCheck: itemCheck,
     );
 
     switch (shape) {
@@ -326,6 +332,7 @@ $variantClasses''';
               valueType: 'List<$basic>',
               fromJson: '[for (final item in json) ${_cast('item', basic)}]',
               toJson: 'value',
+              itemCheck: _itemCheck(basic),
             );
           }
           if (target != null &&
@@ -339,6 +346,7 @@ $variantClasses''';
             fromJson:
                 '[for (final item in json) $type.fromJson(item as Map<String, dynamic>)]',
             toJson: '[for (final item in value) item.toJson()]',
+            itemCheck: 'item is Map<String, dynamic>',
           );
         }
 
@@ -351,6 +359,7 @@ $variantClasses''';
             fromJson:
                 '[for (final item in json) $type.fromJson(item as Map<String, dynamic>)]',
             toJson: '[for (final item in value) item.toJson()]',
+            itemCheck: 'item is Map<String, dynamic>',
           );
         }
 
@@ -360,6 +369,7 @@ $variantClasses''';
             valueType: 'List<$basic>',
             fromJson: '[for (final item in json) ${_cast('item', basic)}]',
             toJson: 'value',
+            itemCheck: _itemCheck(basic),
           );
         }
         return null;
@@ -380,6 +390,12 @@ $variantClasses''';
   }
 
   String _guard(OneOfVariant variant, OneOfUnion union) {
+    if (variant.shape == OneOfShape.list) {
+      return switch (variant.itemCheck) {
+        final check? => 'json.every((item) => $check)',
+        null => '',
+      };
+    }
     if (variant.shape != OneOfShape.map) {
       return '';
     }
@@ -397,7 +413,11 @@ $variantClasses''';
         variant.discriminatorValue != null) {
       return 1 << 20;
     }
-    return variant.shape == OneOfShape.map ? variant.requiredKeys.length : 0;
+    return switch (variant.shape) {
+      OneOfShape.map => variant.requiredKeys.length,
+      OneOfShape.list => variant.itemCheck == null ? 0 : 1,
+      _ => 0,
+    };
   }
 
   SwaggerSchema? _resolveRef(String ref) {
@@ -422,6 +442,11 @@ $variantClasses''';
     'number' => 'double',
     'boolean' => 'bool',
     _ => null,
+  };
+
+  String _itemCheck(String type) => switch (type) {
+    'double' => 'item is num',
+    _ => 'item is $type',
   };
 
   String _cast(String expression, String type) => switch (type) {
