@@ -201,6 +201,15 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       ..deprecated = schema.deprecated || schema.oneOf.single.deprecated;
   }
 
+  /// Whether [schema], or the items of [schema] when it is an array, is
+  /// generated as a union under [key].
+  bool hasOneOfUnion(String key, SwaggerSchema schema) =>
+      resolveOneOfUnion(key, schema) != null ||
+      switch (schema.items) {
+        final items? => resolveOneOfUnion('$key\$Item', items) != null,
+        null => false,
+      };
+
   /// Resolves [schema] to a union named after [unionKey], or returns `null`
   /// when the option is off, the schema has fewer than two branches, or a
   /// branch can't be typed.
@@ -422,7 +431,7 @@ $variantClasses''';
           valueType: 'Map<String, $valueType>',
           fromJson: valueType == 'dynamic'
               ? 'json'
-              : '{for (final MapEntry(:key, :value) in json.entries) key: ${_cast('value', valueType)}}',
+              : '{for (final MapEntry(:key, :value) in json.entries) key: ${_typed('value', valueType)}}',
           toJson: 'value',
         );
 
@@ -442,7 +451,7 @@ $variantClasses''';
           if (basic != null && target?.isEnum != true) {
             return variant(
               valueType: 'List<$basic>',
-              fromJson: '[for (final item in json) ${_cast('item', basic)}]',
+              fromJson: '[for (final item in json) ${_typed('item', basic)}]',
               toJson: 'value',
               itemCheck: _itemCheck(basic),
             );
@@ -456,7 +465,7 @@ $variantClasses''';
           return variant(
             valueType: 'List<$type>',
             fromJson:
-                '[for (final item in json) $type.fromJson(item as Map<String, dynamic>)]',
+                '[for (final item in json) ${_typedObject('item', type)}]',
             toJson: '[for (final item in value) item.toJson()]',
             itemCheck: 'item is Map<String, dynamic>',
           );
@@ -469,7 +478,7 @@ $variantClasses''';
           return variant(
             valueType: 'List<$type>',
             fromJson:
-                '[for (final item in json) $type.fromJson(item as Map<String, dynamic>)]',
+                '[for (final item in json) ${_typedObject('item', type)}]',
             toJson: '[for (final item in value) item.toJson()]',
             itemCheck: 'item is Map<String, dynamic>',
           );
@@ -479,7 +488,7 @@ $variantClasses''';
         if (basic != null) {
           return variant(
             valueType: 'List<$basic>',
-            fromJson: '[for (final item in json) ${_cast('item', basic)}]',
+            fromJson: '[for (final item in json) ${_typed('item', basic)}]',
             toJson: 'value',
             itemCheck: _itemCheck(basic),
           );
@@ -540,13 +549,11 @@ $variantClasses''';
   String _className(String key) =>
       '${getValidatedClassName(key)}${options.modelPostfix}';
 
-  String _additionalPropertiesType(SwaggerSchema branch) {
-    final additional = branch.rawJson?['additionalProperties'];
-    if (additional is Map && additional['type'] is String) {
-      return _basicType(additional['type'] as String) ?? 'dynamic';
-    }
-    return 'dynamic';
-  }
+  String _additionalPropertiesType(SwaggerSchema branch) =>
+      switch (branch.rawJson?['additionalProperties']) {
+        {'type': final String type} => _basicType(type) ?? 'dynamic',
+        _ => 'dynamic',
+      };
 
   String? _basicType(String type) => switch (type) {
     'string' => 'String',
@@ -561,26 +568,31 @@ $variantClasses''';
     _ => 'item is $type',
   };
 
-  String _cast(String expression, String type) => switch (type) {
-    'double' => '($expression as num).toDouble()',
-    _ => '$expression as $type',
+  /// A switch expression that narrows [variable] to the basic [type], or
+  /// throws when the JSON value has another type.
+  String _typed(String variable, String type) => switch (type) {
+    'double' =>
+      "switch ($variable) { final num $variable => $variable.toDouble(), _ => throw ArgumentError.value($variable, 'json', 'Expected a number') }",
+    _ =>
+      "switch ($variable) { final $type $variable => $variable, _ => throw ArgumentError.value($variable, 'json', 'Expected a $type') }",
   };
 
-  _Discriminator? _discriminator(SwaggerSchema schema) {
-    final raw = schema.rawJson?['discriminator'];
-    if (raw is! Map || raw['propertyName'] is! String) {
-      return null;
-    }
-    final mapping = <String, String>{};
-    if (raw['mapping'] case final Map values) {
-      values.forEach((key, value) {
-        if (key is String && value is String) {
-          mapping[value.getUnformattedRef()] = key;
-        }
-      });
-    }
-    return _Discriminator(raw['propertyName'] as String, mapping);
-  }
+  /// A switch expression that decodes [variable] as the JSON object [type], or
+  /// throws when the JSON value is not an object.
+  String _typedObject(String variable, String type) =>
+      "switch ($variable) { final Map<String, dynamic> $variable => $type.fromJson($variable), _ => throw ArgumentError.value($variable, 'json', 'Expected an object') }";
+
+  _Discriminator? _discriminator(SwaggerSchema schema) =>
+      switch (schema.rawJson?['discriminator']) {
+        {'propertyName': final String property} && final Map raw =>
+          _Discriminator(property, {
+            if (raw['mapping'] case final Map mapping)
+              for (final MapEntry(:key, :value) in mapping.entries)
+                if ((key, value) case (final String key, final String ref))
+                  ref.getUnformattedRef(): key,
+          }),
+        _ => null,
+      };
 }
 
 class _Discriminator {

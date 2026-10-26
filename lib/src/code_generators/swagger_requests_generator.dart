@@ -1406,11 +1406,7 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
     final neededResponse = neededResponses.first;
 
     if (neededResponse.schema ?? neededResponse.content?.schema case final schema?) {
-      final unionKey = '${methodName.pascalCase}\$$kResponse';
-      final isUnion =
-          resolveOneOfUnion(unionKey, schema) != null ||
-          (schema.items != null && resolveOneOfUnion('$unionKey\$Item', schema.items!) != null);
-      if (isUnion) {
+      if (hasOneOfUnion('${methodName.pascalCase}\$$kResponse', schema)) {
         return _getResponseModelName(path: path, methodName: methodName, modelPostfix: modelPostfix);
       }
 

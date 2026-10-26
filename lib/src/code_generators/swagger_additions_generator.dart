@@ -162,12 +162,19 @@ String? _dateToJson(DateTime? date) {
     }
 ''';
 
-  static const _oneOfUnionListItem = r'''
+  static const _decodeList = r'''
+  List<T> _decodeList<T>(Iterable values) =>
+      values.where((v) => v != null).map<T>((v) => decode<T>(v) as T).toList();''';
+
+  static const _oneOfUnionDecodeList = r'''
+  List<T> _decodeList<T>(Iterable values) {
     final jsonFactory = factories[T];
     if (jsonFactory is T Function(Object?)) {
       return values.map<T>(jsonFactory).toList();
     }
-''';
+
+    return values.where((v) => v != null).map<T>((v) => decode<T>(v) as T).toList();
+  }''';
 
   ///Copy-pasted converter from internet
   String generateCustomJsonConverter(String fileName) {
@@ -216,10 +223,7 @@ class \$CustomJsonDecoder {
     return jsonFactory(values);
   }
 
-  List<T> _decodeList<T>(Iterable values) {
-${options.generateOneOfUnions ? _oneOfUnionListItem : ''}
-    return values.where((v) => v != null).map<T>((v) => decode<T>(v) as T).toList();
-  }
+${options.generateOneOfUnions ? _oneOfUnionDecodeList : _decodeList}
 }
 
 class \$JsonSerializableConverter extends chopper.JsonConverter {
@@ -242,8 +246,7 @@ class \$JsonSerializableConverter extends chopper.JsonConverter {
     }
 
     final jsonRes = await super.convertResponse(response);
-${options.generateOneOfUnions ? _oneOfUnionResponse : ''}
-    return jsonRes.copyWith<ResultType>(
+${options.generateOneOfUnions ? _oneOfUnionResponse : ''}    return jsonRes.copyWith<ResultType>(
         body: \$jsonDecoder.decode<Item>(jsonRes.body) as ResultType);
   }
 }

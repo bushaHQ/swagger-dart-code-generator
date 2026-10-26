@@ -90,7 +90,7 @@ void main() {
         result,
         contains(
           'final List<dynamic> json => Holder\$Data\$Array([for (final item in json) '
-          'Holder\$Data\$Array\$Item.fromJson(item as Map<String, dynamic>)]),',
+          'switch (item) { final Map<String, dynamic> item => Holder\$Data\$Array\$Item.fromJson(item), _ => throw ArgumentError.value(item, \'json\', \'Expected an object\') }]),',
         ),
       );
       expect(
@@ -151,14 +151,14 @@ void main() {
         result,
         contains(
           'final List<dynamic> json when json.every((item) => item is num) => '
-          'Holder\$Data\$Array1([for (final item in json) (item as num).toDouble()]),',
+          'Holder\$Data\$Array1([for (final item in json) switch (item) { final num item => item.toDouble(), _ => throw ArgumentError.value(item, \'json\', \'Expected a number\') }]),',
         ),
       );
       expect(
         result,
         contains(
           'final List<dynamic> json when json.every((item) => item is Map<String, dynamic>) => '
-          'Holder\$Data\$Array2([for (final item in json) Card.fromJson(item as Map<String, dynamic>)]),',
+          'Holder\$Data\$Array2([for (final item in json) switch (item) { final Map<String, dynamic> item => Card.fromJson(item), _ => throw ArgumentError.value(item, \'json\', \'Expected an object\') }]),',
         ),
       );
     });
@@ -183,7 +183,7 @@ void main() {
       expect(
         result,
         contains(
-          'final Map<String, dynamic> json => Holder\$Data\$Object({for (final MapEntry(:key, :value) in json.entries) key: value as String}),',
+          'final Map<String, dynamic> json => Holder\$Data\$Object({for (final MapEntry(:key, :value) in json.entries) key: switch (value) { final String value => value, _ => throw ArgumentError.value(value, \'json\', \'Expected a String\') }}),',
         ),
       );
       expect(result, contains('final Map<String, String> value;'));
@@ -272,6 +272,37 @@ void main() {
         ]),
       );
       expect(enums.map((e) => e.name), containsAll(referenced));
+    });
+
+    test('narrows JSON values with patterns instead of casts', () {
+      final result = generate(
+        specWith(
+          {
+            'oneOf': [
+              {
+                'type': 'array',
+                'items': {'type': 'number'},
+              },
+              {
+                'type': 'array',
+                'items': {r'$ref': '#/components/schemas/Card'},
+              },
+              {
+                'type': 'object',
+                'additionalProperties': {'type': 'string'},
+              },
+            ],
+          },
+          schemas: {'Card': account},
+        ),
+      );
+
+      final union = RegExp(
+        r'sealed class Holder\$Data \{[\s\S]*?(?=\n@JsonSerializable|\nclass |$)',
+      ).firstMatch(result)?.group(0);
+      expect(union, isNotNull);
+      expect(union, isNot(contains(' as ')));
+      expect(union, isNot(matches(RegExp(r'[\w)\]]!(?!=)'))));
     });
 
     test('keeps the property dynamic when a branch cannot be typed', () {

@@ -271,20 +271,12 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
         final neededSchema =
             neededResponse?.schema ?? neededResponse?.content?.schema;
 
-        final unionResponseName = neededSchema == null
-            ? null
-            : '${key.split('/').map((e) => e.replaceAll('}', '').replaceAll('{', '')).map((e) => e.pascalCase).join()}${operation.pascalCase}\$Response';
+        final unionResponseName =
+            '${key.split('/').map((e) => e.replaceAll('}', '').replaceAll('{', '')).map((e) => e.pascalCase).join()}${operation.pascalCase}\$Response';
 
-        if (neededSchema != null &&
-            unionResponseName != null &&
-            (resolveOneOfUnion(unionResponseName, neededSchema) != null ||
-                (neededSchema.items != null &&
-                    resolveOneOfUnion(
-                          '$unionResponseName\$Item',
-                          neededSchema.items!,
-                        ) !=
-                        null))) {
-          results[unionResponseName] = neededSchema;
+        if (neededSchema case final schema?
+            when hasOneOfUnion(unionResponseName, schema)) {
+          results[unionResponseName] = schema;
         } else if (neededSchema != null &&
             neededSchema.type == kObject &&
             neededSchema.properties.isNotEmpty) {
