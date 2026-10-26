@@ -1,6 +1,7 @@
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_generator_base.dart';
 import 'package:swagger_dart_code_generator/src/extensions/string_extension.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/responses/swagger_schema.dart';
+import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart';
 
 /// The JSON shape a `oneOf` branch decodes from.
 enum OneOfShape { map, list, string, integer, number, boolean }
@@ -88,6 +89,117 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     OneOfShape.number: 'num',
     OneOfShape.boolean: 'bool',
   };
+
+  /// The key a union property of [className] is generated under, matching the
+  /// names of other inner classes.
+  String oneOfPropertyKey(
+    String className,
+    String propertyKey,
+  ) => getValidatedClassName(
+    '${getValidatedClassName(className)}\$${getValidatedClassName(propertyKey)}',
+  );
+
+  /// Removes `type: 'null'` branches from every `oneOf` in [root] and marks the
+  /// schema nullable instead. A property or array item left with a single
+  /// branch is replaced by that branch, so it is typed like any other schema.
+  ///
+  /// Safe to call more than once on the same root.
+  void normalizeNullableOneOfs(SwaggerRoot root) {
+    if (!options.generateOneOfUnions) {
+      return;
+    }
+
+    final visited = Set<SwaggerSchema>.identity();
+
+    void visit(SwaggerSchema? schema) {
+      if (schema == null || !visited.add(schema)) {
+        return;
+      }
+
+      _dropNullBranches(schema);
+
+      if (schema.properties.isNotEmpty) {
+        for (final MapEntry(:key, :value)
+            in schema.properties.entries.toList()) {
+          final collapsed = _collapseNullableOneOf(value);
+          if (!identical(collapsed, value)) {
+            schema.properties[key] = collapsed;
+          }
+          visit(collapsed);
+        }
+      }
+
+      if (schema.items case final items?) {
+        final collapsed = _collapseNullableOneOf(items);
+        schema.items = collapsed;
+        visit(collapsed);
+      }
+
+      for (final branch in [
+        ...schema.oneOf,
+        ...schema.anyOf,
+        ...schema.allOf,
+      ]) {
+        visit(branch);
+      }
+      visit(schema.schema);
+    }
+
+    final components = root.components;
+    [
+      ...root.definitions.values,
+      ...?components?.schemas.values,
+      ...?components?.responses.values,
+      ...?components?.requestBodies.values,
+    ].forEach(visit);
+
+    for (final parameter in [
+      ...root.parameters.values,
+      ...?components?.parameters.values,
+    ]) {
+      visit(parameter.schema);
+    }
+
+    for (final path in root.paths.values) {
+      for (final parameter in path.parameters) {
+        visit(parameter.schema);
+      }
+      for (final request in path.requests.values) {
+        for (final parameter in request.parameters) {
+          visit(parameter.schema);
+        }
+        visit(request.requestBody?.content?.schema);
+        for (final response in request.responses.values) {
+          visit(response.schema);
+          visit(response.content?.schema);
+          visit(response.content?.items);
+        }
+      }
+    }
+  }
+
+  bool _dropNullBranches(SwaggerSchema schema) {
+    bool isNull(SwaggerSchema branch) =>
+        branch.type == 'null' && !branch.hasRef;
+
+    if (!schema.oneOf.any(isNull)) {
+      return false;
+    }
+
+    schema.oneOf = schema.oneOf.where((branch) => !isNull(branch)).toList();
+    schema.isNullable = true;
+    return true;
+  }
+
+  SwaggerSchema _collapseNullableOneOf(SwaggerSchema schema) {
+    if (!_dropNullBranches(schema) || schema.oneOf.length != 1) {
+      return schema;
+    }
+
+    return schema.oneOf.single
+      ..isNullable = true
+      ..deprecated = schema.deprecated || schema.oneOf.single.deprecated;
+  }
 
   /// Resolves [schema] to a union named after [unionKey], or returns `null`
   /// when the option is off, the schema has fewer than two branches, or a

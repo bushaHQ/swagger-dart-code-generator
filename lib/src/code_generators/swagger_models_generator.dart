@@ -86,6 +86,10 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
       final items = schema.items;
 
       if (items != null) {
+        if (resolveOneOfUnion('$className\$Item', items) case final union?) {
+          return 'typedef $className = List<${union.className}>; ${generateOneOfUnionClass(union)}';
+        }
+
         if (items.hasRef) {
           final ref = items.ref;
 
@@ -161,6 +165,13 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
         result.addAll(union.innerClasses);
       }
 
+      if (schema.items case final items?) {
+        if (resolveOneOfUnion('$classKey\$Item', items) case final union?) {
+          result.addAll(union.innerClasses);
+          return;
+        }
+      }
+
       final properties = {
         ...schema.properties,
         ...schema.items?.properties ?? {},
@@ -189,6 +200,15 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
           result[innerClassName] = propSchema;
           result.addAll(union.innerClasses);
           return;
+        }
+
+        if (propSchema.items case final items?) {
+          final itemsKey = '$innerClassName\$Item';
+          if (resolveOneOfUnion(itemsKey, items) case final union?) {
+            result[itemsKey] = items;
+            result.addAll(union.innerClasses);
+            return;
+          }
         }
 
         if (propSchema.properties.isNotEmpty) {
@@ -251,7 +271,21 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
         final neededSchema =
             neededResponse?.schema ?? neededResponse?.content?.schema;
 
+        final unionResponseName = neededSchema == null
+            ? null
+            : '${key.split('/').map((e) => e.replaceAll('}', '').replaceAll('{', '')).map((e) => e.pascalCase).join()}${operation.pascalCase}\$Response';
+
         if (neededSchema != null &&
+            unionResponseName != null &&
+            (resolveOneOfUnion(unionResponseName, neededSchema) != null ||
+                (neededSchema.items != null &&
+                    resolveOneOfUnion(
+                          '$unionResponseName\$Item',
+                          neededSchema.items!,
+                        ) !=
+                        null))) {
+          results[unionResponseName] = neededSchema;
+        } else if (neededSchema != null &&
             neededSchema.type == kObject &&
             neededSchema.properties.isNotEmpty) {
           final pathText = key
@@ -309,6 +343,8 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
               .map((e) => e.generateFromJsonToJson(options.enumsCaseSensitive))
               .join()
         : '';
+
+    normalizeNullableOneOfs(root);
 
     final allEnumListNames = getAllListEnumNames(root);
 
@@ -1314,7 +1350,14 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     final jsonConverterAnnotation = prop.items == null
         ? ''
         : generatePropertyJsonConverterAnnotation(prop.items!);
-    final typeName = _generateListPropertyTypeName(
+    final itemsUnion = switch (prop.items) {
+      final items? => resolveOneOfUnion(
+          '${oneOfPropertyKey(className, propertyKey)}\$Item',
+          items,
+        ),
+      null => null,
+    };
+    final typeName = itemsUnion?.className ?? _generateListPropertyTypeName(
       allEnumListNames: allEnumListNames,
       allEnumNames: allEnumNames,
       basicTypesMap: basicTypesMap,
@@ -2179,6 +2222,8 @@ $allHashComponents;
   }
 
   Map<String, SwaggerSchema> getRequestBodiesFromRequests(SwaggerRoot root) {
+    normalizeNullableOneOfs(root);
+
     final paths = root.paths;
     if (paths.isEmpty) {
       return {};
@@ -2196,9 +2241,15 @@ $allHashComponents;
         if (content != null) {
           final schema = content.schema;
           if (schema != null) {
-            if (schema.type == kObject && schema.properties.isNotEmpty) {
-              final className = '${pathKey.pascalCase}${requestKey.pascalCase}';
+            final className = '${pathKey.pascalCase}${requestKey.pascalCase}';
 
+            if (schema.type == kObject && schema.properties.isNotEmpty) {
+              result[getValidatedClassName(className)] = schema;
+            } else if (resolveOneOfUnion(
+                  getValidatedClassName('$className\$RequestBody'),
+                  schema,
+                ) !=
+                null) {
               result[getValidatedClassName(className)] = schema;
             }
           }

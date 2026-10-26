@@ -2,6 +2,7 @@ import 'package:code_builder/code_builder.dart';
 import 'package:collection/collection.dart';
 import 'package:recase/recase.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/enum_model.dart';
+import 'package:swagger_dart_code_generator/src/code_generators/one_of_union_generator.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_generator_base.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_models_generator.dart';
 import 'package:swagger_dart_code_generator/src/extensions/parameter_extensions.dart';
@@ -16,7 +17,7 @@ import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart
 
 import 'constants.dart';
 
-class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
+class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGenerator {
   final GeneratorOptions _options;
 
   @override
@@ -30,6 +31,15 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     required String fileName,
     required List<EnumModel> allEnums,
   }) {
+    normalizeNullableOneOfs(swaggerRoot);
+    oneOfClasses = {
+      for (final MapEntry(:key, :value) in {
+        ...swaggerRoot.definitions,
+        ...?swaggerRoot.components?.schemas,
+      }.entries)
+        getValidatedClassName(key): value,
+    };
+
     final service = _generateService(swaggerRoot, allEnums, className, fileName);
 
     return service.accept(DartEmitter()).toString();
@@ -340,6 +350,20 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     final successResponses = getSuccessedResponses(responses: request.responses);
     for (final successResponse in successResponses) {
       final responseRef = successResponse.anyRef;
+
+      final inlineSchema = responseRef.isEmpty
+          ? successResponse.schema ?? successResponse.content?.schema
+          : null;
+      if (inlineSchema != null) {
+        if (resolveOneOfUnion(response, inlineSchema) != null) {
+          results.add(response);
+          continue;
+        }
+        if (inlineSchema.items case final items? when resolveOneOfUnion('$response\$Item', items) != null) {
+          results.add('$response\$Item');
+          continue;
+        }
+      }
 
       if (responseRef.isNotEmpty) {
         final schema = root.allSchemas[responseRef.getUnformattedRef()];
@@ -967,7 +991,11 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
 
       final schema = requestBody.content?.schema;
 
-      if (schema != null) {
+      final unionBodyName = getValidatedClassName('$path${requestType.pascalCase}\$$kRequestBody');
+
+      if (schema != null && resolveOneOfUnion(unionBodyName, schema) != null) {
+        typeName = unionBodyName;
+      } else if (schema != null) {
         if (schema.oneOf.length == 1) {
           final oneOfRef = schema.oneOf.first.ref.getUnformattedRef();
           typeName = getValidatedClassName(oneOfRef);
@@ -1195,6 +1223,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         return kBasicTypesMap[neededResponse.type]!;
       }
 
+      if (resolveOneOfUnion('${ref.getUnformattedRef()}\$$kResponse', neededResponse) != null) {
+        return getValidatedClassName('${ref.getRef()}\$$kResponse$modelPostfix');
+      }
+
       if (neededResponse.oneOf.isNotEmpty) {
         return kObject.pascalCase;
       }
@@ -1372,6 +1404,20 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     }
 
     final neededResponse = neededResponses.first;
+
+    if (neededResponse.schema ?? neededResponse.content?.schema case final schema?) {
+      final unionKey = '${methodName.pascalCase}\$$kResponse';
+      final isUnion =
+          resolveOneOfUnion(unionKey, schema) != null ||
+          (schema.items != null && resolveOneOfUnion('$unionKey\$Item', schema.items!) != null);
+      if (isUnion) {
+        return _getResponseModelName(path: path, methodName: methodName, modelPostfix: modelPostfix);
+      }
+
+      if (options.generateOneOfUnions && schema.oneOf.length == 1 && schema.oneOf.single.hasRef) {
+        return getValidatedClassName(schema.oneOf.single.ref.getRef()).withPostfix(modelPostfix);
+      }
+    }
 
     if (neededResponse.schema?.type == kObject &&
         neededResponse.schema?.properties.isNotEmpty == true) {

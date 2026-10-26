@@ -35,6 +35,15 @@ abstract class SwaggerEnumsGenerator extends SwaggerGeneratorBase
     required SwaggerRoot root,
     required String fileName,
   }) {
+    normalizeNullableOneOfs(root);
+    oneOfClasses = {
+      for (final MapEntry(:key, :value) in {
+        ...root.definitions,
+        ...?root.components?.schemas,
+      }.entries)
+        getValidatedClassName(key): value,
+    };
+
     final requestBodies = root.components?.requestBodies ?? {};
     requestBodies.addAll(
         SwaggerModelsGeneratorV2(options).getRequestBodiesFromRequests(root));
@@ -255,7 +264,14 @@ ${allEnums.map((e) => e.toString()).join('\n')}
           final result = <EnumModel>[];
 
           final union =
-              resolveOneOfUnion('$className\$${key.pascalCase}', enumValues);
+              resolveOneOfUnion('$className\$${key.pascalCase}', enumValues) ??
+                  switch (enumValues.items) {
+                    final items? => resolveOneOfUnion(
+                        '$className\$${key.pascalCase}\$Item',
+                        items,
+                      ),
+                    null => null,
+                  };
           if (union != null) {
             union.innerClasses.forEach((innerKey, innerSchema) {
               result.addAll(generateEnumsFromClasses(innerKey, innerSchema, {}));
@@ -339,7 +355,12 @@ ${allEnums.map((e) => e.toString()).join('\n')}
       return enumModel == null ? [] : [enumModel];
     }
 
-    if (resolveOneOfUnion(className, schema) case final union?) {
+    final union = resolveOneOfUnion(className, schema) ??
+        switch (schema.items) {
+          final items? => resolveOneOfUnion('$className\$Item', items),
+          null => null,
+        };
+    if (union != null) {
       return [
         for (final MapEntry(:key, :value) in union.innerClasses.entries)
           ...generateEnumsFromClasses(key, value, schemas),
