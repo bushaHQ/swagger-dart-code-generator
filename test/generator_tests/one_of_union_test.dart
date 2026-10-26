@@ -82,7 +82,7 @@ void main() {
       expect(
         result,
         contains(
-          'final Map<String, dynamic> json => '
+          "final Map<String, dynamic> json when json.containsKey('account_number') => "
           'Holder\$Data\$Object(Holder\$Data\$Object\$Value.fromJson(json)),',
         ),
       );
@@ -215,13 +215,13 @@ void main() {
       expect(
         result,
         contains(
-          "final Map<String, dynamic> json when json['kind'] == 'card' => Holder\$Data\$Object1(Card.fromJson(json)),",
+          "final Map<String, dynamic> json when json['kind'] == 'card' => Holder\$Data\$Card(Card.fromJson(json)),",
         ),
       );
       expect(
         result,
         contains(
-          "final Map<String, dynamic> json when json['kind'] == 'Bank' => Holder\$Data\$Object2(Bank.fromJson(json)),",
+          "final Map<String, dynamic> json when json['kind'] == 'Bank' => Holder\$Data\$Bank(Bank.fromJson(json)),",
         ),
       );
     });
@@ -310,6 +310,43 @@ void main() {
       expect(union, isNot(contains(' as ')));
       expect(union, isNot(contains('throw')));
       expect(union, isNot(matches(RegExp(r'[\w)\]]!(?!=)'))));
+    });
+
+    test('names referenced branches after their schema', () {
+      final result = generate(
+        specWith(
+          {
+            'oneOf': [
+              {r'$ref': '#/components/schemas/Card'},
+              {r'$ref': '#/components/schemas/Card'},
+              {r'$ref': '#/components/schemas/Unknown'},
+              account,
+            ],
+          },
+          schemas: {'Card': account, 'Unknown': account},
+        ),
+      );
+
+      expect(
+        result,
+        contains('final class Holder\$Data\$Card1 extends Holder\$Data {'),
+      );
+      expect(
+        result,
+        contains('final class Holder\$Data\$Card2 extends Holder\$Data {'),
+      );
+      expect(
+        result,
+        contains('final class Holder\$Data\$Unknown1 extends Holder\$Data {'),
+      );
+      expect(
+        result,
+        contains('final class Holder\$Data\$Object extends Holder\$Data {'),
+      );
+      expect(
+        result,
+        contains('final class Holder\$Data\$Unknown extends Holder\$Data {'),
+      );
     });
 
     test('keeps the property dynamic when a branch cannot be typed', () {

@@ -73,6 +73,8 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
   /// branches. Set before the classes are generated.
   Map<String, SwaggerSchema> oneOfClasses = {};
 
+  static const _unknown = 'Unknown';
+
   static const _shapeNames = {
     OneOfShape.map: 'Object',
     OneOfShape.list: 'Array',
@@ -234,12 +236,11 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     final innerClasses = <String, SwaggerSchema>{};
     final variants = <OneOfVariant>[];
 
+    final kinds = _variantKinds(schema.oneOf, shapes);
+
     for (var i = 0; i < schema.oneOf.length; i++) {
       final shape = shapes[i];
-      final sameShape = shapes.where((s) => s == shape).length;
-      final position = shapes.sublist(0, i).where((s) => s == shape).length;
-      final kind =
-          '${_shapeNames[shape]}${sameShape > 1 ? '${position + 1}' : ''}';
+      final kind = kinds[i];
 
       final variant = _resolveVariant(
         branch: schema.oneOf[i],
@@ -261,6 +262,28 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       innerClasses: innerClasses,
       discriminatorProperty: discriminator?.property,
     );
+  }
+
+  /// Names each branch's subclass: a `$ref` branch after the schema it refers
+  /// to (`$Card`), any other branch after its JSON shape (`$Object`, `$Array`).
+  /// Names that repeat, or clash with `$Unknown`, are numbered in order.
+  List<String> _variantKinds(
+    List<SwaggerSchema> branches,
+    List<OneOfShape> shapes,
+  ) {
+    final names = [
+      for (final (index, branch) in branches.indexed)
+        branch.hasRef
+            ? getValidatedClassName(branch.ref.getUnformattedRef())
+            : _shapeNames[shapes[index]] ?? '',
+    ];
+
+    return [
+      for (final (index, name) in names.indexed)
+        names.where((other) => other == name).length > 1 || name == _unknown
+            ? '$name${names.sublist(0, index).where((other) => other == name).length + 1}'
+            : name,
+    ];
   }
 
   /// Generates the sealed union class, one subclass per branch, and an
@@ -286,7 +309,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     }
 
     final unknown = OneOfVariant(
-      className: '$name\$Unknown',
+      className: '$name\$$_unknown',
       shape: OneOfShape.map,
       valueType: 'Object?',
       fromJson: 'json',
@@ -339,7 +362,7 @@ sealed class $name {
 
   factory $name.fromJson(Object? json) => switch (json) {
 ${cases.join('\n')}
-    _ => $name\$Unknown(json),
+    _ => $name\$$_unknown(json),
   };
 
   static const fromJsonFactory = $name.fromJson;
@@ -534,18 +557,19 @@ $variantClasses''';
 
   /// The condition JSON of the right shape must meet to match [variant].
   ///
-  /// Element types are always checked, so a matched branch never meets a value
-  /// it can't hold. Discriminators and required keys only tell apart branches
-  /// of the same shape, so they are left out when [variant] is the only one.
+  /// Required keys and element types are always checked, so a matched branch
+  /// never meets JSON it can't hold, and anything else becomes `$Unknown`.
+  /// Discriminators only tell apart branches of the same shape, so they are
+  /// left out when [variant] is the only one.
   String _guard(
     OneOfVariant variant,
     OneOfUnion union, {
     required bool ambiguous,
   }) {
     final conditions = [
-      if (ambiguous && variant.shape == OneOfShape.map)
+      if (variant.shape == OneOfShape.map)
         if (union.discriminatorProperty case final property?
-            when variant.discriminatorValue != null)
+            when ambiguous && variant.discriminatorValue != null)
           "json['$property'] == '${variant.discriminatorValue}'"
         else
           for (final key in variant.requiredKeys) "json.containsKey('$key')",
