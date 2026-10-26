@@ -414,6 +414,22 @@ void main() {
       );
     });
 
+    test('keeps the first of several identical branches, in spec order', () {
+      final result = generate(
+        specWith({
+          'oneOf': [
+            for (var i = 0; i < 40; i++) {'type': 'string'},
+          ],
+        }),
+      );
+
+      expect(
+        result,
+        contains('final String json => Holder\$Data\$String1(json),'),
+      );
+      expect(RegExp(r'final String json').allMatches(result), hasLength(1));
+    });
+
     test('does not warn when every branch can be matched', () {
       expect(
         () => generate(

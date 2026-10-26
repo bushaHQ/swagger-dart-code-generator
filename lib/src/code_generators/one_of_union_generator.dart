@@ -305,8 +305,14 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     final cases = <String>[];
     final unreachable = <String>[];
     for (final shape in OneOfShape.values) {
+      final order = union.variants.indexOf;
       final variants = union.variants.where((v) => v.shape == shape).toList()
-        ..sort((a, b) => _guardWeight(b, union) - _guardWeight(a, union));
+        ..sort(
+          (a, b) => switch (_guardWeight(b, union) - _guardWeight(a, union)) {
+            0 => order(a) - order(b),
+            final byWeight => byWeight,
+          },
+        );
 
       final guards = <String>{};
       var matchesEverything = false;
