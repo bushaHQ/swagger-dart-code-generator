@@ -89,9 +89,14 @@ void main() {
       expect(
         result,
         contains(
-          'final List<dynamic> json => Holder\$Data\$Array([for (final item in json) '
-          'switch (item) { final Map<String, dynamic> item => Holder\$Data\$Array\$Item.fromJson(item), _ => throw ArgumentError.value(item, \'json\', \'Expected an object\') }]),',
+          'final List<dynamic> json when json.every((item) => item is Map<String, dynamic>) => '
+          'Holder\$Data\$Array(json.whereType<Map<String, dynamic>>().map(Holder\$Data\$Array\$Item.fromJson).toList()),',
         ),
+      );
+      expect(result, contains('_ => Holder\$Data\$Unknown(json),'));
+      expect(
+        result,
+        contains('final class Holder\$Data\$Unknown extends Holder\$Data {'),
       );
       expect(
         result,
@@ -151,14 +156,14 @@ void main() {
         result,
         contains(
           'final List<dynamic> json when json.every((item) => item is num) => '
-          'Holder\$Data\$Array1([for (final item in json) switch (item) { final num item => item.toDouble(), _ => throw ArgumentError.value(item, \'json\', \'Expected a number\') }]),',
+          'Holder\$Data\$Array1(json.whereType<num>().map((item) => item.toDouble()).toList()),',
         ),
       );
       expect(
         result,
         contains(
           'final List<dynamic> json when json.every((item) => item is Map<String, dynamic>) => '
-          'Holder\$Data\$Array2([for (final item in json) switch (item) { final Map<String, dynamic> item => Card.fromJson(item), _ => throw ArgumentError.value(item, \'json\', \'Expected an object\') }]),',
+          'Holder\$Data\$Array2(json.whereType<Map<String, dynamic>>().map(Card.fromJson).toList()),',
         ),
       );
     });
@@ -183,7 +188,8 @@ void main() {
       expect(
         result,
         contains(
-          'final Map<String, dynamic> json => Holder\$Data\$Object({for (final MapEntry(:key, :value) in json.entries) key: switch (value) { final String value => value, _ => throw ArgumentError.value(value, \'json\', \'Expected a String\') }}),',
+          'final Map<String, dynamic> json when json.values.every((value) => value is String) => '
+          'Holder\$Data\$Object({for (final MapEntry(:key, :value) in json.entries) if (value is String) key: value}),',
         ),
       );
       expect(result, contains('final Map<String, String> value;'));
@@ -274,7 +280,7 @@ void main() {
       expect(enums.map((e) => e.name), containsAll(referenced));
     });
 
-    test('narrows JSON values with patterns instead of casts', () {
+    test('narrows JSON values without casts or throws', () {
       final result = generate(
         specWith(
           {
@@ -302,6 +308,7 @@ void main() {
       ).firstMatch(result)?.group(0);
       expect(union, isNotNull);
       expect(union, isNot(contains(' as ')));
+      expect(union, isNot(contains('throw')));
       expect(union, isNot(matches(RegExp(r'[\w)\]]!(?!=)'))));
     });
 

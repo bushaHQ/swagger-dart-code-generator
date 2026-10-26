@@ -16,7 +16,7 @@ class OneOfVariant {
     required this.toJson,
     required this.requiredKeys,
     required this.discriminatorValue,
-    required this.itemCheck,
+    required this.elementType,
   });
 
   /// The generated subclass of the union that holds this branch.
@@ -39,8 +39,9 @@ class OneOfVariant {
   /// declares a discriminator.
   final String? discriminatorValue;
 
-  /// Type test every `item` of a JSON array must pass to match this branch.
-  final String? itemCheck;
+  /// The type every item of a JSON array, or every value of a JSON object
+  /// used as a map, must have to match this branch.
+  final String? elementType;
 }
 
 /// A `oneOf` schema resolved to a sealed union.
@@ -262,7 +263,9 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     );
   }
 
-  /// Generates the sealed union class and one subclass per branch.
+  /// Generates the sealed union class, one subclass per branch, and an
+  /// `$Unknown` subclass holding JSON that matches no branch, like
+  /// `swaggerGeneratedUnknown` for enums.
   String generateOneOfUnionClass(OneOfUnion union) {
     final name = union.className;
 
@@ -272,7 +275,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
         ..sort((a, b) => _guardWeight(b, union) - _guardWeight(a, union));
 
       for (final variant in variants) {
-        final guard = variants.length > 1 ? _guard(variant, union) : '';
+        final guard = _guard(variant, union, ambiguous: variants.length > 1);
         cases.add(
           '    final ${_shapePatterns[shape]} json${guard.isEmpty ? '' : ' when $guard'} => ${variant.className}(${variant.fromJson}),',
         );
@@ -282,7 +285,18 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       }
     }
 
-    final variantClasses = union.variants
+    final unknown = OneOfVariant(
+      className: '$name\$Unknown',
+      shape: OneOfShape.map,
+      valueType: 'Object?',
+      fromJson: 'json',
+      toJson: 'value',
+      requiredKeys: const [],
+      discriminatorValue: null,
+      elementType: null,
+    );
+
+    final variantClasses = [...union.variants, unknown]
         .map((variant) {
           final equality = options.overrideEqualsAndHashcode
               ? '''
@@ -325,7 +339,7 @@ sealed class $name {
 
   factory $name.fromJson(Object? json) => switch (json) {
 ${cases.join('\n')}
-    _ => throw ArgumentError.value(json, 'json', 'Does not match any variant'),
+    _ => $name\$Unknown(json),
   };
 
   static const fromJsonFactory = $name.fromJson;
@@ -388,7 +402,7 @@ $variantClasses''';
       required String toJson,
       List<String> requiredKeys = const [],
       String? discriminatorValue,
-      String? itemCheck,
+      String? elementType,
     }) => OneOfVariant(
       className: variantClassName,
       shape: shape,
@@ -397,7 +411,7 @@ $variantClasses''';
       toJson: toJson,
       requiredKeys: requiredKeys,
       discriminatorValue: discriminatorValue,
-      itemCheck: itemCheck,
+      elementType: elementType,
     );
 
     switch (shape) {
@@ -427,12 +441,20 @@ $variantClasses''';
         }
 
         final valueType = _additionalPropertiesType(branch);
+        if (valueType == 'dynamic') {
+          return variant(
+            valueType: 'Map<String, dynamic>',
+            fromJson: 'json',
+            toJson: 'value',
+          );
+        }
+        final elementType = _elementType(valueType);
         return variant(
           valueType: 'Map<String, $valueType>',
-          fromJson: valueType == 'dynamic'
-              ? 'json'
-              : '{for (final MapEntry(:key, :value) in json.entries) key: ${_typed('value', valueType)}}',
+          fromJson:
+              '{for (final MapEntry(:key, :value) in json.entries) if (value is $elementType) key: ${_fromElement('value', valueType)}}',
           toJson: 'value',
+          elementType: elementType,
         );
 
       case OneOfShape.list:
@@ -451,9 +473,9 @@ $variantClasses''';
           if (basic != null && target?.isEnum != true) {
             return variant(
               valueType: 'List<$basic>',
-              fromJson: '[for (final item in json) ${_typed('item', basic)}]',
+              fromJson: _listOf(basic),
               toJson: 'value',
-              itemCheck: _itemCheck(basic),
+              elementType: _elementType(basic),
             );
           }
           if (target != null &&
@@ -465,9 +487,9 @@ $variantClasses''';
           return variant(
             valueType: 'List<$type>',
             fromJson:
-                '[for (final item in json) ${_typedObject('item', type)}]',
+                'json.whereType<Map<String, dynamic>>().map($type.fromJson).toList()',
             toJson: '[for (final item in value) item.toJson()]',
-            itemCheck: 'item is Map<String, dynamic>',
+            elementType: 'Map<String, dynamic>',
           );
         }
 
@@ -478,9 +500,9 @@ $variantClasses''';
           return variant(
             valueType: 'List<$type>',
             fromJson:
-                '[for (final item in json) ${_typedObject('item', type)}]',
+                'json.whereType<Map<String, dynamic>>().map($type.fromJson).toList()',
             toJson: '[for (final item in value) item.toJson()]',
-            itemCheck: 'item is Map<String, dynamic>',
+            elementType: 'Map<String, dynamic>',
           );
         }
 
@@ -488,9 +510,9 @@ $variantClasses''';
         if (basic != null) {
           return variant(
             valueType: 'List<$basic>',
-            fromJson: '[for (final item in json) ${_typed('item', basic)}]',
+            fromJson: _listOf(basic),
             toJson: 'value',
-            itemCheck: _itemCheck(basic),
+            elementType: _elementType(basic),
           );
         }
         return null;
@@ -510,23 +532,30 @@ $variantClasses''';
     }
   }
 
-  String _guard(OneOfVariant variant, OneOfUnion union) {
-    if (variant.shape == OneOfShape.list) {
-      return switch (variant.itemCheck) {
-        final check? => 'json.every((item) => $check)',
-        null => '',
-      };
-    }
-    if (variant.shape != OneOfShape.map) {
-      return '';
-    }
-    if (union.discriminatorProperty case final property?
-        when variant.discriminatorValue != null) {
-      return "json['$property'] == '${variant.discriminatorValue}'";
-    }
-    return variant.requiredKeys
-        .map((key) => "json.containsKey('$key')")
-        .join(' && ');
+  /// The condition JSON of the right shape must meet to match [variant].
+  ///
+  /// Element types are always checked, so a matched branch never meets a value
+  /// it can't hold. Discriminators and required keys only tell apart branches
+  /// of the same shape, so they are left out when [variant] is the only one.
+  String _guard(
+    OneOfVariant variant,
+    OneOfUnion union, {
+    required bool ambiguous,
+  }) {
+    final conditions = [
+      if (ambiguous && variant.shape == OneOfShape.map)
+        if (union.discriminatorProperty case final property?
+            when variant.discriminatorValue != null)
+          "json['$property'] == '${variant.discriminatorValue}'"
+        else
+          for (final key in variant.requiredKeys) "json.containsKey('$key')",
+      if (variant.elementType case final type?)
+        switch (variant.shape) {
+          OneOfShape.list => 'json.every((item) => item is $type)',
+          _ => 'json.values.every((value) => value is $type)',
+        },
+    ];
+    return conditions.join(' && ');
   }
 
   int _guardWeight(OneOfVariant variant, OneOfUnion union) {
@@ -534,11 +563,8 @@ $variantClasses''';
         variant.discriminatorValue != null) {
       return 1 << 20;
     }
-    return switch (variant.shape) {
-      OneOfShape.map => variant.requiredKeys.length,
-      OneOfShape.list => variant.itemCheck == null ? 0 : 1,
-      _ => 0,
-    };
+    return variant.requiredKeys.length * 2 +
+        (variant.elementType == null ? 0 : 1);
   }
 
   SwaggerSchema? _resolveRef(String ref) {
@@ -563,24 +589,18 @@ $variantClasses''';
     _ => null,
   };
 
-  String _itemCheck(String type) => switch (type) {
-    'double' => 'item is num',
-    _ => 'item is $type',
-  };
+  /// The type a JSON value has before it is converted to the basic [type].
+  String _elementType(String type) => type == 'double' ? 'num' : type;
 
-  /// A switch expression that narrows [variable] to the basic [type], or
-  /// throws when the JSON value has another type.
-  String _typed(String variable, String type) => switch (type) {
-    'double' =>
-      "switch ($variable) { final num $variable => $variable.toDouble(), _ => throw ArgumentError.value($variable, 'json', 'Expected a number') }",
-    _ =>
-      "switch ($variable) { final $type $variable => $variable, _ => throw ArgumentError.value($variable, 'json', 'Expected a $type') }",
-  };
+  /// Converts [variable], already known to be an [_elementType], to [type].
+  String _fromElement(String variable, String type) =>
+      type == 'double' ? '$variable.toDouble()' : variable;
 
-  /// A switch expression that decodes [variable] as the JSON object [type], or
-  /// throws when the JSON value is not an object.
-  String _typedObject(String variable, String type) =>
-      "switch ($variable) { final Map<String, dynamic> $variable => $type.fromJson($variable), _ => throw ArgumentError.value($variable, 'json', 'Expected an object') }";
+  /// Builds a list of the basic [type] from a JSON array whose items were
+  /// already checked by the guard.
+  String _listOf(String type) => type == 'double'
+      ? 'json.whereType<num>().map((item) => item.toDouble()).toList()'
+      : 'json.whereType<$type>().toList()';
 
   _Discriminator? _discriminator(SwaggerSchema schema) =>
       switch (schema.rawJson?['discriminator']) {
