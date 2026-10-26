@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:recase/recase.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/constants.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/enum_model.dart';
+import 'package:swagger_dart_code_generator/src/code_generators/one_of_union_generator.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_generator_base.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_requests_generator.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v2/swagger_models_generator_v2.dart';
@@ -13,7 +14,8 @@ import 'package:swagger_dart_code_generator/src/swagger_models/responses/swagger
 import 'package:swagger_dart_code_generator/src/swagger_models/swagger_path.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart';
 
-abstract class SwaggerEnumsGenerator extends SwaggerGeneratorBase {
+abstract class SwaggerEnumsGenerator extends SwaggerGeneratorBase
+    with OneOfUnionGenerator {
   final GeneratorOptions _options;
 
   @override
@@ -252,6 +254,15 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
           final result = <EnumModel>[];
 
+          final union =
+              resolveOneOfUnion('$className\$${key.pascalCase}', enumValues);
+          if (union != null) {
+            union.innerClasses.forEach((innerKey, innerSchema) {
+              result.addAll(generateEnumsFromClasses(innerKey, innerSchema, {}));
+            });
+            return result;
+          }
+
           if (properties.isNotEmpty) {
             final isListProperty =
                 enumValues.items?.properties.isNotEmpty == true;
@@ -326,6 +337,13 @@ ${allEnums.map((e) => e.toString()).join('\n')}
       final enumModel = generateEnumContentIfPossible(schema, className);
 
       return enumModel == null ? [] : [enumModel];
+    }
+
+    if (resolveOneOfUnion(className, schema) case final union?) {
+      return [
+        for (final MapEntry(:key, :value) in union.innerClasses.entries)
+          ...generateEnumsFromClasses(key, value, schemas),
+      ];
     }
 
     if (schema.items != null) {

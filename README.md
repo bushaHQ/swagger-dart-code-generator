@@ -95,6 +95,7 @@ targets:
 | `multipart_file_type` | `List<int>` | `false` | Allow to override the generated class for multipart file (See #605). |
 | `override_to_string` | `bool` | `true` | Overrides `toString()` method using `jsonEncode(this)` |
 | `generate_first_succeed_response` | `true` | `false` | If request has multiple success responses, first one will be generated. Otherwice - `dynamic` |
+| `generate_one_of_unions` | `false` | `false` | Generate a sealed class for every `oneOf` with more than one branch instead of typing it as `dynamic`. Branches are matched by JSON shape, then by `discriminator` or required keys. A `oneOf` with a branch that can't be typed stays `dynamic`. |
 | `multipart_file_type` | `List<int>` | `false` | Type if input parameter of Multipart request |
 | `scalars` | `-` | `{}` | A map of custom types that are used for string properties with a given [format](https://swagger.io/docs/specification/data-models/data-types/#format). See example [here](#overriden-formats-implementation) |
 
