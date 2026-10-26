@@ -652,6 +652,40 @@ void main() {
       );
     });
 
+    test('uses the model postfix for union bodies and responses', () {
+      final postfixed = GeneratorOptions(
+        inputFolder: '',
+        outputFolder: '',
+        generateOneOfUnions: true,
+        modelPostfix: 'Dto',
+      );
+      final models = SwaggerModelsGeneratorV3(postfixed).generate(
+        root: SwaggerRoot.parse(spec),
+        fileName: 'fileName',
+        allEnums: [],
+      );
+      final requests = SwaggerRequestsGenerator(postfixed).generate(
+        swaggerRoot: SwaggerRoot.parse(spec),
+        className: 'ThingsService',
+        fileName: 'things_service',
+        allEnums: [],
+      );
+
+      expect(models, contains('sealed class ThingsPut\$RequestBodyDto {'));
+      expect(models, contains('sealed class ThingsPut\$ResponseDto {'));
+      expect(requests, contains('ThingsPut\$RequestBodyDto? body'));
+      expect(
+        requests,
+        contains('Future<chopper.Response<ThingsPut\$ResponseDto>> thingsPut('),
+      );
+      expect(
+        requests,
+        contains(
+          'generatedMapping.putIfAbsent(ThingsPut\$ResponseDto, () => ThingsPut\$ResponseDto.fromJsonFactory);',
+        ),
+      );
+    });
+
     test('decodes union bodies and union list items in the converter', () {
       String converter({required bool enabled}) => SwaggerAdditionsGenerator(
         GeneratorOptions(

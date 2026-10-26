@@ -359,9 +359,11 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
           results.add(response);
           continue;
         }
-        if (inlineSchema.items case final items? when resolveOneOfUnion('$response\$Item', items) != null) {
-          results.add('$response\$Item');
-          continue;
+        if (inlineSchema.items case final items?) {
+          if (resolveOneOfUnion('$response\$Item', items) case final union?) {
+            results.add(union.className);
+            continue;
+          }
         }
       }
 
@@ -993,8 +995,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
 
       final unionBodyName = getValidatedClassName('$path${requestType.pascalCase}\$$kRequestBody');
 
-      if (schema != null && resolveOneOfUnion(unionBodyName, schema) != null) {
-        typeName = unionBodyName;
+      final bodyUnion = schema == null ? null : resolveOneOfUnion(unionBodyName, schema);
+
+      if (bodyUnion != null) {
+        typeName = bodyUnion.className;
       } else if (schema != null) {
         if (schema.oneOf.length == 1) {
           final oneOfRef = schema.oneOf.first.ref.getUnformattedRef();
@@ -1223,8 +1227,8 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
         return kBasicTypesMap[neededResponse.type]!;
       }
 
-      if (resolveOneOfUnion('${ref.getUnformattedRef()}\$$kResponse', neededResponse) != null) {
-        return getValidatedClassName('${ref.getRef()}\$$kResponse$modelPostfix');
+      if (resolveOneOfUnion('${ref.getUnformattedRef()}\$$kResponse', neededResponse) case final union?) {
+        return union.className;
       }
 
       if (neededResponse.oneOf.isNotEmpty) {
@@ -1406,8 +1410,12 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
     final neededResponse = neededResponses.first;
 
     if (neededResponse.schema ?? neededResponse.content?.schema case final schema?) {
-      if (hasOneOfUnion('${methodName.pascalCase}\$$kResponse', schema)) {
-        return _getResponseModelName(path: path, methodName: methodName, modelPostfix: modelPostfix);
+      final unionKey = '${methodName.pascalCase}\$$kResponse';
+      if (resolveOneOfUnion(unionKey, schema) case final union?) {
+        return union.className;
+      }
+      if (schema.items case final items? when resolveOneOfUnion('$unionKey\$Item', items) != null) {
+        return getValidatedClassName(unionKey);
       }
 
       if (options.generateOneOfUnions && schema.oneOf.length == 1 && schema.oneOf.single.hasRef) {
