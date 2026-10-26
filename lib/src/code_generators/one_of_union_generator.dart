@@ -1,3 +1,5 @@
+import 'package:collection/collection.dart';
+import 'package:recase/recase.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_generator_base.dart';
 import 'package:swagger_dart_code_generator/src/extensions/string_extension.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/responses/swagger_schema.dart';
@@ -15,9 +17,10 @@ class OneOfVariant {
     required this.fromJson,
     required this.toJson,
     required this.requiredKeys,
-    required this.discriminatorValue,
+    required this.discriminatorValues,
     required this.elementType,
     this.allowedValues = const [],
+    this.propertyNames = const {},
   });
 
   /// The generated subclass of the union that holds this branch.
@@ -36,9 +39,9 @@ class OneOfVariant {
   /// Keys a JSON object must contain to match this branch.
   final List<String> requiredKeys;
 
-  /// The discriminator value that selects this branch, when the `oneOf`
-  /// declares a discriminator.
-  final String? discriminatorValue;
+  /// The discriminator values that select this branch, when the `oneOf` or
+  /// the schemas its branches extend declare a discriminator.
+  final List<String> discriminatorValues;
 
   /// The type every item of a JSON array, or every value of a JSON object
   /// used as a map, must have to match this branch.
@@ -47,6 +50,9 @@ class OneOfVariant {
   /// Dart literals of the only values a string or integer branch accepts,
   /// from its `enum`.
   final List<String> allowedValues;
+
+  /// Properties an object branch declares, including through `allOf`.
+  final Set<String> propertyNames;
 }
 
 /// A `oneOf` schema resolved to a sealed union.
@@ -101,6 +107,62 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     OneOfShape.number: 'num',
     OneOfShape.boolean: 'bool',
   };
+
+  /// Points [oneOfClasses] at the component schemas of [root], so `$ref`
+  /// branches resolve the same way in every generator.
+  void useOneOfClassesFrom(SwaggerRoot root) {
+    oneOfClasses = {
+      for (final MapEntry(:key, :value) in {
+        ...root.definitions,
+        ...?root.components?.schemas,
+      }.entries)
+        getValidatedClassName(key): value,
+    };
+  }
+
+  /// The key an inline response of [method] on [path] is generated under.
+  String inlineResponseKey(String path, String method) {
+    final pathText = path
+        .split('/')
+        .map((part) => part.replaceAll('}', '').replaceAll('{', '').pascalCase)
+        .join();
+    return '$pathText${method.pascalCase}\$Response';
+  }
+
+  /// The only branch of [schema] when it is a `oneOf` with one branch, for
+  /// example after its `type: 'null'` branch was dropped.
+  SwaggerSchema? singleOneOfBranch(SwaggerSchema schema) =>
+      options.generateOneOfUnions && schema.oneOf.length == 1
+      ? schema.oneOf.single
+      : null;
+
+  /// The Dart type a `$ref` to [ref] is generated as, or `null` when it
+  /// can't be used as a model type (an array, or an enum when [allowEnums] is
+  /// off).
+  String? refTypeName(String ref, {bool allowEnums = true}) {
+    final name = ref.getUnformattedRef();
+    final target = _resolveRef(ref);
+    if (target == null) {
+      return _className(name);
+    }
+    if (target.isEnum) {
+      return allowEnums ? 'enums.${getValidatedClassName(name)}' : null;
+    }
+    if (_basicType(target.type) case final basic?) {
+      return basic;
+    }
+    if (target.type == 'array') {
+      return null;
+    }
+    return _className(name);
+  }
+
+  /// The union the items of [schema] are generated as, under `$key$Item`.
+  OneOfUnion? resolveItemsOneOfUnion(String key, SwaggerSchema schema) =>
+      switch (schema.items) {
+        final items? => resolveOneOfUnion('$key\$Item', items),
+        null => null,
+      };
 
   /// The key a union property of [className] is generated under, matching the
   /// names of other inner classes.
@@ -158,12 +220,25 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     }
 
     final components = root.components;
-    [
-      ...root.definitions.values,
-      ...?components?.schemas.values,
-      ...?components?.responses.values,
-      ...?components?.requestBodies.values,
-    ].forEach(visit);
+    for (final schemas in [
+      root.definitions,
+      ...?switch (components) {
+        final components? => [
+          components.schemas,
+          components.responses,
+          components.requestBodies,
+        ],
+        null => null,
+      },
+    ]) {
+      for (final MapEntry(:key, :value) in schemas.entries.toList()) {
+        _dropNullBranches(value);
+        if (singleOneOfBranch(value) case final branch? when !branch.hasRef) {
+          schemas[key] = _collapseNullableOneOf(value);
+        }
+        visit(schemas[key]);
+      }
+    }
 
     for (final parameter in [
       ...root.parameters.values,
@@ -204,23 +279,23 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
   }
 
   SwaggerSchema _collapseNullableOneOf(SwaggerSchema schema) {
-    if (!_dropNullBranches(schema) || schema.oneOf.length != 1) {
+    final droppedNull = _dropNullBranches(schema);
+    if (schema.oneOf.length != 1) {
       return schema;
     }
 
-    return schema.oneOf.single
-      ..isNullable = true
-      ..deprecated = schema.deprecated || schema.oneOf.single.deprecated;
+    final branch = schema.oneOf.single;
+    return branch
+      ..isNullable =
+          droppedNull || schema.isNullable == true || branch.isNullable == true
+      ..deprecated = schema.deprecated || branch.deprecated;
   }
 
   /// Whether [schema], or the items of [schema] when it is an array, is
   /// generated as a union under [key].
   bool hasOneOfUnion(String key, SwaggerSchema schema) =>
       resolveOneOfUnion(key, schema) != null ||
-      switch (schema.items) {
-        final items? => resolveOneOfUnion('$key\$Item', items) != null,
-        null => false,
-      };
+      resolveItemsOneOfUnion(key, schema) != null;
 
   /// Resolves [schema] to a union named after [unionKey], or returns `null`
   /// when the option is off, the schema has fewer than two branches, or a
@@ -241,7 +316,8 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
 
     final unionName =
         '${getValidatedClassName(unionKey)}${options.modelPostfix}';
-    final discriminator = _discriminator(schema);
+    final discriminator =
+        _discriminator(schema) ?? _inheritedDiscriminator(schema.oneOf);
     final innerClasses = <String, SwaggerSchema>{};
     final variants = <OneOfVariant>[];
 
@@ -317,7 +393,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       final guards = <String>{};
       var matchesEverything = false;
       for (final variant in variants) {
-        final guard = _guard(variant, union, ambiguous: variants.length > 1);
+        final guard = _guard(variant, union, sameShape: variants);
         if (matchesEverything || !guards.add(guard)) {
           unreachable.add(variant.className);
           continue;
@@ -327,6 +403,33 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
         );
         matchesEverything = guard.isEmpty;
       }
+    }
+
+    final objects = union.variants
+        .where(
+          (variant) =>
+              variant.shape == OneOfShape.map &&
+              (union.discriminatorProperty == null ||
+                  variant.discriminatorValues.isEmpty),
+        )
+        .toList();
+    final byProperties = [
+      for (final variant in objects)
+        if (objects.any(
+          (other) =>
+              !identical(other, variant) &&
+              const SetEquality<String>().equals(
+                other.requiredKeys.toSet(),
+                variant.requiredKeys.toSet(),
+              ),
+        ))
+          variant.className,
+    ];
+    if (byProperties.isNotEmpty) {
+      print(
+        '[WARNING] oneOf $name: ${byProperties.join(', ')} are told apart only by which of their '
+        'properties the JSON contains. Add a discriminator to match them exactly.',
+      );
     }
 
     if (unreachable.isNotEmpty) {
@@ -344,7 +447,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       fromJson: 'json',
       toJson: 'value',
       requiredKeys: const [],
-      discriminatorValue: null,
+      discriminatorValues: const [],
       elementType: null,
     );
 
@@ -453,9 +556,10 @@ $variantClasses''';
       required String fromJson,
       required String toJson,
       List<String> requiredKeys = const [],
-      String? discriminatorValue,
+      List<String> discriminatorValues = const [],
       String? elementType,
       List<String> allowedValues = const [],
+      Set<String> propertyNames = const {},
     }) => OneOfVariant(
       className: variantClassName,
       shape: shape,
@@ -463,9 +567,10 @@ $variantClasses''';
       fromJson: fromJson,
       toJson: toJson,
       requiredKeys: requiredKeys,
-      discriminatorValue: discriminatorValue,
+      discriminatorValues: discriminatorValues,
       elementType: elementType,
       allowedValues: allowedValues,
+      propertyNames: propertyNames,
     );
 
     switch (shape) {
@@ -473,12 +578,14 @@ $variantClasses''';
         if (branch.hasRef) {
           final refName = branch.ref.getUnformattedRef();
           final type = _className(refName);
+          final target = _resolveRef(branch.ref);
           return variant(
             valueType: type,
             fromJson: '$type.fromJson(json)',
             toJson: 'value.toJson()',
-            requiredKeys: _resolveRef(branch.ref)?.required ?? const [],
-            discriminatorValue: discriminator?.valueFor(refName),
+            requiredKeys: target == null ? const [] : _requiredKeys(target),
+            discriminatorValues: discriminator?.valuesFor(refName) ?? const [],
+            propertyNames: target == null ? const {} : _propertyNames(target),
           );
         }
 
@@ -490,7 +597,8 @@ $variantClasses''';
             valueType: type,
             fromJson: '$type.fromJson(json)',
             toJson: 'value.toJson()',
-            requiredKeys: branch.required,
+            requiredKeys: _requiredKeys(branch),
+            propertyNames: _propertyNames(branch),
           );
         }
 
@@ -611,15 +719,41 @@ $variantClasses''';
   String _guard(
     OneOfVariant variant,
     OneOfUnion union, {
-    required bool ambiguous,
+    required List<OneOfVariant> sameShape,
   }) {
+    final ambiguous = sameShape.length > 1;
+    final discriminated =
+        ambiguous &&
+        union.discriminatorProperty != null &&
+        variant.discriminatorValues.isNotEmpty;
+    final unique = ambiguous && !discriminated
+        ? _uniqueProperties(variant, sameShape)
+        : const <String>{};
+    final othersUnique = ambiguous && !discriminated
+        ? {
+            for (final other in sameShape)
+              if (!identical(other, variant))
+                ..._uniqueProperties(other, sameShape),
+          }
+        : const <String>{};
+
     final conditions = [
-      if (variant.shape == OneOfShape.map)
-        if (union.discriminatorProperty case final property?
-            when ambiguous && variant.discriminatorValue != null)
-          "json['$property'] == '${variant.discriminatorValue}'"
+      if (variant.shape == OneOfShape.map) ...[
+        if (discriminated)
+          if (variant.discriminatorValues case [final value])
+            'json[${_stringLiteral(union.discriminatorProperty ?? '')}] == ${_stringLiteral(value)}'
+          else
+            'const {${variant.discriminatorValues.map(_stringLiteral).join(', ')}}.contains(json[${_stringLiteral(union.discriminatorProperty ?? '')}])'
         else
-          for (final key in variant.requiredKeys) "json.containsKey('$key')",
+          for (final key in variant.requiredKeys)
+            'json.containsKey(${_stringLiteral(key)})',
+        if (unique.isNotEmpty &&
+            !discriminated &&
+            !variant.requiredKeys.any(unique.contains))
+          '(${unique.map((key) => 'json.containsKey(${_stringLiteral(key)})').join(' || ')})',
+        for (final key in othersUnique)
+          '!json.containsKey(${_stringLiteral(key)})',
+      ],
       if (variant.allowedValues.isNotEmpty)
         'const {${variant.allowedValues.join(', ')}}.contains(json)',
       if (variant.elementType case final type?)
@@ -633,12 +767,101 @@ $variantClasses''';
 
   int _guardWeight(OneOfVariant variant, OneOfUnion union) {
     if (union.discriminatorProperty != null &&
-        variant.discriminatorValue != null) {
+        variant.discriminatorValues.isNotEmpty) {
       return 1 << 20;
     }
     return variant.requiredKeys.length * 2 +
+        variant.propertyNames.length +
         (variant.elementType == null ? 0 : 1) +
         (variant.allowedValues.isEmpty ? 0 : 1);
+  }
+
+  /// Properties only [variant] declares among the object branches in
+  /// [sameShape], so their presence in the JSON points to [variant].
+  Set<String> _uniqueProperties(
+    OneOfVariant variant,
+    List<OneOfVariant> sameShape,
+  ) => {
+    for (final name in variant.propertyNames)
+      if (sameShape.every(
+        (other) =>
+            identical(other, variant) || !other.propertyNames.contains(name),
+      ))
+        name,
+  };
+
+  /// [schema]'s required keys, including those it inherits through `allOf`.
+  List<String> _requiredKeys(SwaggerSchema schema, [Set<SwaggerSchema>? seen]) {
+    final visited = seen ?? Set<SwaggerSchema>.identity();
+    if (!visited.add(schema)) {
+      return const [];
+    }
+    return {
+      ...schema.required,
+      for (final part in schema.allOf)
+        ..._requiredKeys(switch (part.hasRef) {
+          true => _resolveRef(part.ref) ?? part,
+          false => part,
+        }, visited),
+    }.toList();
+  }
+
+  /// The properties [schema] declares, including through `allOf`.
+  Set<String> _propertyNames(SwaggerSchema schema, [Set<SwaggerSchema>? seen]) {
+    final visited = seen ?? Set<SwaggerSchema>.identity();
+    if (!visited.add(schema)) {
+      return const {};
+    }
+    return {
+      ...schema.properties.keys,
+      for (final part in schema.allOf)
+        ..._propertyNames(switch (part.hasRef) {
+          true => _resolveRef(part.ref) ?? part,
+          false => part,
+        }, visited),
+    };
+  }
+
+  /// The discriminator the `$ref` branches inherit through `allOf` from a
+  /// shared base schema, when the `oneOf` doesn't declare one itself.
+  _Discriminator? _inheritedDiscriminator(List<SwaggerSchema> branches) {
+    _Discriminator? inherited(SwaggerSchema schema, Set<SwaggerSchema> seen) {
+      if (!seen.add(schema)) {
+        return null;
+      }
+      if (_discriminator(schema) case final own?) {
+        return own;
+      }
+      for (final part in schema.allOf) {
+        if (part.hasRef) {
+          if (_resolveRef(part.ref) case final parent?) {
+            if (inherited(parent, seen) case final found?) {
+              return found;
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    final found = [
+      for (final branch in branches)
+        if (branch.hasRef)
+          if (_resolveRef(branch.ref) case final target?)
+            inherited(target, Set<SwaggerSchema>.identity()),
+    ];
+    if (found.isEmpty ||
+        found.length != branches.where((branch) => branch.hasRef).length) {
+      return null;
+    }
+    final [first, ...rest] = found;
+    if (first == null ||
+        rest.any((other) => other?.property != first.property)) {
+      return null;
+    }
+    return _Discriminator(first.property, {
+      for (final discriminator in found) ...?discriminator?.valuesByRef,
+    });
   }
 
   SwaggerSchema? _resolveRef(String ref) {
@@ -686,24 +909,30 @@ $variantClasses''';
       ? 'json.whereType<num>().map((item) => item.toDouble()).toList()'
       : 'json.whereType<$type>().toList()';
 
-  _Discriminator? _discriminator(SwaggerSchema schema) =>
-      switch (schema.rawJson?['discriminator']) {
-        {'propertyName': final String property} && final Map raw =>
-          _Discriminator(property, {
-            if (raw['mapping'] case final Map mapping)
-              for (final MapEntry(:key, :value) in mapping.entries)
-                if ((key, value) case (final String key, final String ref))
-                  ref.getUnformattedRef(): key,
-          }),
-        _ => null,
-      };
+  _Discriminator? _discriminator(SwaggerSchema schema) {
+    if (schema.rawJson?['discriminator']
+        case {'propertyName': final String property} && final Map raw) {
+      final valuesByRef = <String, List<String>>{};
+      if (raw['mapping'] case final Map mapping) {
+        for (final MapEntry(:key, :value) in mapping.entries) {
+          if ((key, value) case (final String key, final String ref)) {
+            (valuesByRef[ref.getUnformattedRef()] ??= []).add(key);
+          }
+        }
+      }
+      return _Discriminator(property, valuesByRef);
+    }
+    return null;
+  }
 }
 
 class _Discriminator {
   _Discriminator(this.property, this.valuesByRef);
 
   final String property;
-  final Map<String, String> valuesByRef;
 
-  String valueFor(String refName) => valuesByRef[refName] ?? refName;
+  /// Every mapping value for each schema, so aliases all match.
+  final Map<String, List<String>> valuesByRef;
+
+  List<String> valuesFor(String refName) => valuesByRef[refName] ?? [refName];
 }

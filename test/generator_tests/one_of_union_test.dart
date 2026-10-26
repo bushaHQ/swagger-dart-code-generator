@@ -124,10 +124,10 @@ void main() {
       );
 
       final iban = result.indexOf(
-        "final Map<String, dynamic> json when json.containsKey('iban') && json.containsKey('bic') => Holder\$Data\$Object2(",
+        "final Map<String, dynamic> json when json.containsKey('iban') && json.containsKey('bic') && !json.containsKey('account_number') => Holder\$Data\$Object2(",
       );
       final accountNumber = result.indexOf(
-        "final Map<String, dynamic> json when json.containsKey('account_number') => Holder\$Data\$Object1(",
+        "final Map<String, dynamic> json when json.containsKey('account_number') && !json.containsKey('iban') && !json.containsKey('bic') => Holder\$Data\$Object1(",
       );
       expect(iban, isNonNegative);
       expect(accountNumber, greaterThan(iban));
@@ -704,5 +704,408 @@ void main() {
       );
       expect(converter(enabled: false), isNot(contains('Function(Object?)')));
     });
+  });
+
+  group('review fixes', () {
+    Map<String, dynamic> api({
+      Map<String, dynamic> paths = const {},
+      Map<String, dynamic> schemas = const {},
+    }) => {
+      'openapi': '3.0.0',
+      'info': {'title': 'test', 'version': '1'},
+      'paths': paths,
+      'components': {'schemas': schemas},
+    };
+    Map<String, dynamic> ref(String name) => {
+      r'$ref': '#/components/schemas/$name',
+    };
+    Map<String, dynamic> json(
+      Map<String, dynamic> schema, {
+      String code = '200',
+    }) => {
+      code: {
+        'description': 'ok',
+        'content': {
+          'application/json': {'schema': schema},
+        },
+      },
+    };
+    final pets = {
+      'Pet': {
+        'type': 'object',
+        'required': ['petType', 'name'],
+        'properties': {
+          'petType': {'type': 'string'},
+          'name': {'type': 'string'},
+        },
+      },
+      'Cat': {
+        'allOf': [
+          ref('Pet'),
+          {
+            'type': 'object',
+            'properties': {
+              'livesLeft': {'type': 'integer'},
+            },
+          },
+        ],
+      },
+      'Dog': {
+        'allOf': [
+          ref('Pet'),
+          {
+            'type': 'object',
+            'properties': {
+              'barks': {'type': 'boolean'},
+            },
+          },
+        ],
+      },
+    };
+    String models(Map<String, dynamic> spec, [GeneratorOptions? options]) =>
+        SwaggerModelsGeneratorV3(
+          options ??
+              GeneratorOptions(
+                inputFolder: '',
+                outputFolder: '',
+                generateOneOfUnions: true,
+              ),
+        ).generate(
+          root: SwaggerRoot.parse(jsonEncode(spec)),
+          fileName: 'f',
+          allEnums: [],
+        );
+    String requests(Map<String, dynamic> spec, [GeneratorOptions? options]) =>
+        SwaggerRequestsGenerator(
+          options ??
+              GeneratorOptions(
+                inputFolder: '',
+                outputFolder: '',
+                generateOneOfUnions: true,
+              ),
+        ).generate(
+          swaggerRoot: SwaggerRoot.parse(jsonEncode(spec)),
+          className: 'S',
+          fileName: 's',
+          allEnums: [],
+        );
+
+    test(
+      'names inline union responses after the path when request names come from operationId',
+      () {
+        final spec = api(
+          paths: {
+            '/ops': {
+              'get': {
+                'operationId': 'listOps',
+                'responses': json({
+                  'oneOf': [
+                    {'type': 'string'},
+                    {'type': 'integer'},
+                  ],
+                }),
+              },
+            },
+          },
+        );
+        final options = GeneratorOptions(
+          inputFolder: '',
+          outputFolder: '',
+          generateOneOfUnions: true,
+          usePathForRequestNames: false,
+        );
+
+        expect(
+          models(spec, options),
+          contains('sealed class OpsGet\$Response {'),
+        );
+        expect(
+          requests(spec, options),
+          contains('Future<chopper.Response<OpsGet\$Response>> listOps('),
+        );
+      },
+    );
+
+    test('types a union response under any 2xx code', () {
+      final spec = api(
+        paths: {
+          '/accepted': {
+            'post': {
+              'responses': json({
+                'oneOf': [
+                  {'type': 'string'},
+                  {'type': 'integer'},
+                ],
+              }, code: '202'),
+            },
+          },
+        },
+      );
+
+      expect(models(spec), contains('sealed class AcceptedPost\$Response {'));
+      expect(
+        requests(spec),
+        contains(
+          'Future<chopper.Response<AcceptedPost\$Response>> acceptedPost(',
+        ),
+      );
+    });
+
+    test(
+      'tells allOf subtypes apart by required keys they inherit and properties only they declare',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              ...pets,
+              'Owner': {
+                'type': 'object',
+                'properties': {
+                  'pet': {
+                    'oneOf': [ref('Cat'), ref('Dog')],
+                  },
+                },
+              },
+            },
+          ),
+        );
+
+        expect(
+          result,
+          contains(
+            "final Map<String, dynamic> json when json.containsKey('petType') && json.containsKey('name') && "
+            "(json.containsKey('livesLeft')) && !json.containsKey('barks') => Owner\$Pet\$Cat(Cat.fromJson(json)),",
+          ),
+        );
+        expect(
+          result,
+          contains(
+            "final Map<String, dynamic> json when json.containsKey('petType') && json.containsKey('name') && "
+            "(json.containsKey('barks')) && !json.containsKey('livesLeft') => Owner\$Pet\$Dog(Dog.fromJson(json)),",
+          ),
+        );
+      },
+    );
+
+    test(
+      'warns when object branches are told apart only by their properties',
+      () {
+        expect(
+          () => models(
+            api(
+              schemas: {
+                ...pets,
+                'Owner': {
+                  'type': 'object',
+                  'properties': {
+                    'pet': {
+                      'oneOf': [ref('Cat'), ref('Dog')],
+                    },
+                  },
+                },
+              },
+            ),
+          ),
+          prints(
+            contains(
+              '[WARNING] oneOf Owner\$Pet: Owner\$Pet\$Cat, Owner\$Pet\$Dog are told apart only by',
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'uses a discriminator inherited from a base schema, with aliases and escaping',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              'Animal': {
+                'type': 'object',
+                'required': [r'$type'],
+                'properties': {
+                  r'$type': {'type': 'string'},
+                },
+                'discriminator': {
+                  'propertyName': r'$type',
+                  'mapping': {
+                    'lion': '#/components/schemas/Lion',
+                    "big'cat": '#/components/schemas/Lion',
+                    'wolf': '#/components/schemas/Wolf',
+                  },
+                },
+              },
+              'Lion': {
+                'allOf': [ref('Animal')],
+              },
+              'Wolf': {
+                'allOf': [ref('Animal')],
+              },
+              'Zoo': {
+                'type': 'object',
+                'properties': {
+                  'animal': {
+                    'oneOf': [ref('Lion'), ref('Wolf')],
+                  },
+                },
+              },
+            },
+          ),
+        );
+
+        expect(
+          result,
+          contains(
+            "final Map<String, dynamic> json when const {'lion', 'big\\'cat'}.contains(json['\\\$type']) => Zoo\$Animal\$Lion(Lion.fromJson(json)),",
+          ),
+        );
+        expect(
+          result,
+          contains(
+            "final Map<String, dynamic> json when json['\\\$type'] == 'wolf' => Zoo\$Animal\$Wolf(Wolf.fromJson(json)),",
+          ),
+        );
+      },
+    );
+
+    test('types a single remaining branch through the usual rules', () {
+      final spec = api(
+        paths: {
+          '/status': {
+            'get': {
+              'responses': json({
+                'oneOf': [
+                  ref('Status'),
+                  {'type': 'null'},
+                ],
+              }),
+            },
+          },
+          '/id': {
+            'get': {
+              'responses': json({
+                'oneOf': [
+                  ref('Id'),
+                  {'type': 'null'},
+                ],
+              }),
+            },
+          },
+        },
+        schemas: {
+          'Status': {
+            'type': 'string',
+            'enum': ['on', 'off'],
+          },
+          'Id': {'type': 'string'},
+          'Cat': {
+            'type': 'object',
+            'properties': {
+              'name': {'type': 'string'},
+            },
+          },
+          'MaybeCat': {
+            'oneOf': [
+              ref('Cat'),
+              {'type': 'null'},
+            ],
+          },
+        },
+      );
+
+      final generated = requests(spec);
+      expect(generated, contains('Future<chopper.Response> statusGet('));
+      expect(generated, contains('Future<chopper.Response<String>> idGet('));
+      expect(models(spec), contains('typedef MaybeCat = Cat;'));
+    });
+
+    test('does not emit a request body class when the union falls back', () {
+      final result = models(
+        api(
+          paths: {
+            '/eb': {
+              'post': {
+                'requestBody': {
+                  'content': {
+                    'application/json': {
+                      'schema': {
+                        'oneOf': [ref('Status'), ref('Cat')],
+                      },
+                    },
+                  },
+                },
+                'responses': json({'type': 'string'}),
+              },
+            },
+          },
+          schemas: {
+            'Status': {
+              'type': 'string',
+              'enum': ['on', 'off'],
+            },
+            'Cat': {
+              'type': 'object',
+              'properties': {
+                'name': {'type': 'string'},
+              },
+            },
+          },
+        ),
+      );
+
+      expect(result, isNot(contains('EbPost\$RequestBody')));
+    });
+
+    test(
+      'makes nullable item unions nullable and keeps custom annotations on union fields',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              'Holder': {
+                'type': 'object',
+                'properties': {
+                  'tags': {
+                    'type': 'array',
+                    'items': {
+                      'oneOf': [
+                        {'type': 'string'},
+                        {'type': 'integer'},
+                        {'type': 'null'},
+                      ],
+                    },
+                  },
+                  'note': {
+                    'oneOf': [
+                      {'type': 'string'},
+                      {'type': 'integer'},
+                    ],
+                    'x-deprecated-message': 'use tags',
+                  },
+                },
+              },
+            },
+          ),
+          GeneratorOptions(
+            inputFolder: '',
+            outputFolder: '',
+            generateOneOfUnions: true,
+            customAnnotations: [
+              CustomAnnotationMap(
+                typeName: 'Deprecated',
+                swaggerKey: 'x-deprecated-message',
+              ),
+            ],
+          ),
+        );
+
+        expect(result, contains('final List<Holder\$Tags\$Item?>? tags;'));
+        expect(
+          result,
+          contains("@Deprecated('use tags')\n  final Holder\$Note? note;"),
+        );
+      },
+    );
   });
 }

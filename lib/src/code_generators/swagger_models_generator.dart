@@ -58,6 +58,14 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
       return generateOneOfUnionClass(union);
     }
 
+    if (singleOneOfBranch(schema) case final branch? when branch.hasRef) {
+      return switch (refTypeName(branch.ref)) {
+        final type? =>
+          'typedef ${getValidatedClassName(className)}${options.modelPostfix} = $type;',
+        null => '',
+      };
+    }
+
     if (schema.ref.isNotEmpty) {
       return '';
     }
@@ -271,12 +279,25 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
         final neededSchema =
             neededResponse?.schema ?? neededResponse?.content?.schema;
 
-        final unionResponseName =
-            '${key.split('/').map((e) => e.replaceAll('}', '').replaceAll('{', '')).map((e) => e.pascalCase).join()}${operation.pascalCase}\$Response';
+        final unionResponseName = inlineResponseKey(key, operation);
+        final successSchema =
+            switch (SwaggerRequestsGenerator.getSuccessedResponses(
+              responses: responses,
+            ).firstOrNull) {
+              final response? => response.schema ?? response.content?.schema,
+              null => null,
+            };
 
-        if (neededSchema case final schema?
+        if (successSchema case final schema?
             when hasOneOfUnion(unionResponseName, schema)) {
           results[unionResponseName] = schema;
+        } else if (switch (successSchema) {
+              final schema? => singleOneOfBranch(schema),
+              null => null,
+            }
+            case final branch?
+            when !branch.hasRef && branch.properties.isNotEmpty) {
+          results[unionResponseName] = branch;
         } else if (neededSchema != null &&
             neededSchema.type == kObject &&
             neededSchema.properties.isNotEmpty) {
@@ -1248,7 +1269,6 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     required String className,
     required Map<String, SwaggerSchema> allClasses,
   }) {
-
     if (className.endsWith('\$Item') &&
         prop.items?.properties.isNotEmpty == true) {
       return kObject.pascalCase;
@@ -1344,20 +1364,27 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
         : generatePropertyJsonConverterAnnotation(prop.items!);
     final itemsUnion = switch (prop.items) {
       final items? => resolveOneOfUnion(
-          '${oneOfPropertyKey(className, propertyKey)}\$Item',
-          items,
-        ),
+        '${oneOfPropertyKey(className, propertyKey)}\$Item',
+        items,
+      ),
       null => null,
     };
-    final typeName = itemsUnion?.className ?? _generateListPropertyTypeName(
-      allEnumListNames: allEnumListNames,
-      allEnumNames: allEnumNames,
-      basicTypesMap: basicTypesMap,
-      className: className,
-      allClasses: allClasses,
-      prop: prop,
-      propertyName: propertyName,
-    );
+    final itemsUnionType = switch (itemsUnion) {
+      final union? when prop.items?.isNullable == true => '${union.className}?',
+      final union? => union.className,
+      null => null,
+    };
+    final typeName =
+        itemsUnionType ??
+        _generateListPropertyTypeName(
+          allEnumListNames: allEnumListNames,
+          allEnumNames: allEnumNames,
+          basicTypesMap: basicTypesMap,
+          className: className,
+          allClasses: allClasses,
+          prop: prop,
+          propertyName: propertyName,
+        );
 
     final unknownEnumValue = generateEnumValue(
       allEnumNames: allEnumNames,
@@ -1538,7 +1565,13 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
       typeName = typeName.makeNullable();
     }
 
-    return "\t@JsonKey(name: '${_validatePropertyKey(propertyKey)}'$includeIfNullString)\n$deprecatedContent  final $typeName $propertyName;";
+    final customAnnotations = [
+      for (final annotation in options.customAnnotations)
+        if (prop.rawJson?[annotation.swaggerKey] case final value?)
+          "\t@${annotation.typeName}(${value is String ? "'$value'" : '$value'})\n",
+    ].join();
+
+    return "\t@JsonKey(name: '${_validatePropertyKey(propertyKey)}'$includeIfNullString)\n$deprecatedContent$customAnnotations  final $typeName $propertyName;";
   }
 
   String generatePropertyContentByType(
@@ -1634,10 +1667,6 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
       final basicTypesMap = generateBasicTypesMapFromSchemas(root);
 
       propertyName = getValidatedParameterName(propertyName).asParameterName();
-
-      if (propertyName == 'response') {
-        final a = 0;
-      }
 
       if (propertyName.isEmpty) {
         propertyName = '\$';
@@ -2215,6 +2244,7 @@ $allHashComponents;
 
   Map<String, SwaggerSchema> getRequestBodiesFromRequests(SwaggerRoot root) {
     normalizeNullableOneOfs(root);
+    useOneOfClassesFrom(root);
 
     final paths = root.paths;
     if (paths.isEmpty) {
@@ -2243,6 +2273,9 @@ $allHashComponents;
                 ) !=
                 null) {
               result[getValidatedClassName(className)] = schema;
+            } else if (singleOneOfBranch(schema) case final branch?
+                when branch.type == kObject && branch.properties.isNotEmpty) {
+              result[getValidatedClassName(className)] = branch;
             }
           }
         }

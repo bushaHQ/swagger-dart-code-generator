@@ -36,17 +36,12 @@ abstract class SwaggerEnumsGenerator extends SwaggerGeneratorBase
     required String fileName,
   }) {
     normalizeNullableOneOfs(root);
-    oneOfClasses = {
-      for (final MapEntry(:key, :value) in {
-        ...root.definitions,
-        ...?root.components?.schemas,
-      }.entries)
-        getValidatedClassName(key): value,
-    };
+    useOneOfClassesFrom(root);
 
     final requestBodies = root.components?.requestBodies ?? {};
     requestBodies.addAll(
-        SwaggerModelsGeneratorV2(options).getRequestBodiesFromRequests(root));
+      SwaggerModelsGeneratorV2(options).getRequestBodiesFromRequests(root),
+    );
 
     final formattedRequestBodies = <String, SwaggerSchema>{};
     requestBodies.forEach((key, value) {
@@ -64,8 +59,9 @@ abstract class SwaggerEnumsGenerator extends SwaggerGeneratorBase
 
     final enumsFromRequests = generateEnumsContentFromRequests(root, fileName);
     final enumsFromResponses = generateEnumsFromSchemaMap(formattedResponses);
-    final enumsFromRequestBodies =
-        generateEnumsFromSchemaMap(formattedRequestBodies);
+    final enumsFromRequestBodies = generateEnumsFromSchemaMap(
+      formattedRequestBodies,
+    );
 
     final enumsFromClasses = definitions.keys
         .map((String className) {
@@ -136,7 +132,9 @@ ${allEnums.map((e) => e.toString()).join('\n')}
   }
 
   List<EnumModel> generateEnumsContentFromRequests(
-      SwaggerRoot swaggerRoot, String fileName) {
+    SwaggerRoot swaggerRoot,
+    String fileName,
+  ) {
     final result = <EnumModel>[];
 
     final definedParameters = <String, SwaggerRequestParameter>{};
@@ -155,8 +153,8 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
       final isInteger =
           kIntegerTypes.contains(swaggerRequestParameter.schema?.type) ||
-              kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
-              kIntegerTypes.contains(swaggerRequestParameter.schema?.items?.type);
+          kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
+          kIntegerTypes.contains(swaggerRequestParameter.schema?.items?.type);
 
       if (enumValues.isNotEmpty &&
           swaggerRoot.components?.schemas.containsKey(key) != true) {
@@ -172,10 +170,13 @@ ${allEnums.map((e) => e.toString()).join('\n')}
     });
 
     swaggerRoot.paths.forEach((String path, SwaggerPath swaggerPath) {
-      swaggerPath.requests
-          .forEach((String requestType, SwaggerRequest swaggerRequest) {
+      swaggerPath.requests.forEach((
+        String requestType,
+        SwaggerRequest swaggerRequest,
+      ) {
         final successResponses = SwaggerRequestsGenerator.getSuccessedResponses(
-            responses: swaggerRequest.responses);
+          responses: swaggerRequest.responses,
+        );
 
         for (final successResponse in successResponses) {
           final successResponseSchema =
@@ -184,7 +185,7 @@ ${allEnums.map((e) => e.toString()).join('\n')}
           if (successResponseSchema != null) {
             final responseEnums = generateEnumsFromSchemaMap({
               '${path.pascalCase}${requestType.pascalCase}\$$kResponse':
-                  successResponseSchema
+                  successResponseSchema,
             });
             result.addAll(responseEnums);
           }
@@ -203,7 +204,10 @@ ${allEnums.map((e) => e.toString()).join('\n')}
           final swaggerRequestParameter = parameters[p];
 
           var name = generateRequestEnumName(
-              path, requestType, swaggerRequestParameter.name);
+            path,
+            requestType,
+            swaggerRequestParameter.name,
+          );
 
           name = getValidatedClassName(name);
 
@@ -223,8 +227,10 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
           final isInteger =
               kIntegerTypes.contains(swaggerRequestParameter.schema?.type) ||
-                  kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
-              kIntegerTypes.contains(swaggerRequestParameter.schema?.items?.type);
+              kIntegerTypes.contains(swaggerRequestParameter.items?.type) ||
+              kIntegerTypes.contains(
+                swaggerRequestParameter.schema?.items?.type,
+              );
 
           if (enumValues.isNotEmpty) {
             final enumContent = EnumModel(
@@ -244,7 +250,9 @@ ${allEnums.map((e) => e.toString()).join('\n')}
   }
 
   List<EnumModel> generateEnumsContentFromModelProperties(
-      Map<String, SwaggerSchema> map, String className) {
+    Map<String, SwaggerSchema> map,
+    String className,
+  ) {
     if (map.isEmpty) {
       return [];
     }
@@ -265,16 +273,15 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
           final union =
               resolveOneOfUnion('$className\$${key.pascalCase}', enumValues) ??
-                  switch (enumValues.items) {
-                    final items? => resolveOneOfUnion(
-                        '$className\$${key.pascalCase}\$Item',
-                        items,
-                      ),
-                    null => null,
-                  };
+              resolveItemsOneOfUnion(
+                '$className\$${key.pascalCase}',
+                enumValues,
+              );
           if (union != null) {
             union.innerClasses.forEach((innerKey, innerSchema) {
-              result.addAll(generateEnumsFromClasses(innerKey, innerSchema, {}));
+              result.addAll(
+                generateEnumsFromClasses(innerKey, innerSchema, {}),
+              );
             });
             return result;
           }
@@ -321,7 +328,9 @@ ${allEnums.map((e) => e.toString()).join('\n')}
   }
 
   EnumModel? generateEnumContentIfPossible(
-      SwaggerSchema schema, String enumName) {
+    SwaggerSchema schema,
+    String enumName,
+  ) {
     enumName = getValidatedClassName(enumName);
 
     if (schema.isEnum) {
@@ -355,11 +364,9 @@ ${allEnums.map((e) => e.toString()).join('\n')}
       return enumModel == null ? [] : [enumModel];
     }
 
-    final union = resolveOneOfUnion(className, schema) ??
-        switch (schema.items) {
-          final items? => resolveOneOfUnion('$className\$Item', items),
-          null => null,
-        };
+    final union =
+        resolveOneOfUnion(className, schema) ??
+        resolveItemsOneOfUnion(className, schema);
     if (union != null) {
       return [
         for (final MapEntry(:key, :value) in union.innerClasses.entries)
@@ -369,8 +376,10 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
     if (schema.items != null) {
       if (schema.items!.isEnum) {
-        final enumModel =
-            generateEnumContentIfPossible(schema.items!, className);
+        final enumModel = generateEnumContentIfPossible(
+          schema.items!,
+          className,
+        );
         return enumModel == null ? [] : [enumModel];
       }
 
@@ -379,7 +388,9 @@ ${allEnums.map((e) => e.toString()).join('\n')}
 
         schema.items?.properties.forEach((key, value) {
           final enumModel = generateEnumContentIfPossible(
-              value, '$className\$Item${key.pascalCase}');
+            value,
+            '$className\$Item${key.pascalCase}',
+          );
           if (enumModel != null) {
             result.add(enumModel);
           }
@@ -454,4 +465,8 @@ extension Unique<E, Id> on List<E> {
 }
 
 List<String> _firstNonEmpty(List<List<String>?> candidates) =>
-    candidates.firstWhere((values) => values?.isNotEmpty == true, orElse: () => const []) ?? const [];
+    candidates.firstWhere(
+      (values) => values?.isNotEmpty == true,
+      orElse: () => const [],
+    ) ??
+    const [];

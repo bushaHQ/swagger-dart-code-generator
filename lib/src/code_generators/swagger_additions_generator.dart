@@ -51,11 +51,12 @@ final Map<Type, Object Function(Map<String, dynamic>)> $mappingVariableName = {}
   ) {
     final result = StringBuffer();
 
-    final chopperPartImport =
-        buildOnlyModels ? '' : "part '$swaggerFileName.swagger.chopper.dart';";
+    final chopperPartImport = buildOnlyModels
+        ? ''
+        : "part '$swaggerFileName.swagger.chopper.dart';";
 
-    final overridenModels = options.overridenModels
-            .any((e) => e.fileName == swaggerFileName)
+    final overridenModels =
+        options.overridenModels.any((e) => e.fileName == swaggerFileName)
         ? 'import \'${options.overridenModels.firstWhere((e) => e.fileName == swaggerFileName).importUrl}\';'
         : '';
 
@@ -73,8 +74,9 @@ import 'package:chopper/chopper.dart' as chopper;''';
         ? "import '$swaggerFileName.enums.swagger.dart' as enums;"
         : '';
 
-    final enumsExport =
-        hasEnums ? "export '$swaggerFileName.enums.swagger.dart';" : '';
+    final enumsExport = hasEnums
+        ? "export '$swaggerFileName.enums.swagger.dart';"
+        : '';
 
     result.writeln("""
 // coverage:ignore-file
@@ -158,8 +160,10 @@ String? _dateToJson(DateTime? date) {
   static const _oneOfUnionResponse = r'''
     final Object? unionFactory = generatedMapping[ResultType];
     if (unionFactory is ResultType Function(Object?)) {
-      return jsonRes.copyWith<ResultType>(body: unionFactory(jsonRes.body));
+      final body = jsonDecode(response.bodyString);
+      return chopper.Response(response.base, body == null ? null : unionFactory(body), error: response.error);
     }
+
 ''';
 
   static const _decodeList = r'''
@@ -245,8 +249,8 @@ class \$JsonSerializableConverter extends chopper.JsonConverter {
               as ResultType);
     }
 
-    final jsonRes = await super.convertResponse(response);
-${options.generateOneOfUnions ? _oneOfUnionResponse : ''}    return jsonRes.copyWith<ResultType>(
+${options.generateOneOfUnions ? _oneOfUnionResponse : ''}    final jsonRes = await super.convertResponse(response);
+    return jsonRes.copyWith<ResultType>(
         body: \$jsonDecoder.decode<Item>(jsonRes.body) as ResultType);
   }
 }

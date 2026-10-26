@@ -32,13 +32,7 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
     required List<EnumModel> allEnums,
   }) {
     normalizeNullableOneOfs(swaggerRoot);
-    oneOfClasses = {
-      for (final MapEntry(:key, :value) in {
-        ...swaggerRoot.definitions,
-        ...?swaggerRoot.components?.schemas,
-      }.entries)
-        getValidatedClassName(key): value,
-    };
+    useOneOfClassesFrom(swaggerRoot);
 
     final service = _generateService(swaggerRoot, allEnums, className, fileName);
 
@@ -364,6 +358,15 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
             results.add(union.className);
             continue;
           }
+        }
+        if (singleOneOfBranch(inlineSchema) case final branch?) {
+          if (!branch.hasRef) {
+            results.add(response);
+          } else if (refTypeName(branch.ref, allowEnums: false) case final type?
+              when !const {'String', 'int', 'double', 'bool'}.contains(type)) {
+            results.add(type);
+          }
+          continue;
         }
       }
 
@@ -999,6 +1002,13 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
 
       if (bodyUnion != null) {
         typeName = bodyUnion.className;
+      } else if (schema != null && singleOneOfBranch(schema) != null) {
+        typeName = _getRequestBodyTypeName(
+          schema: schema.oneOf.single,
+          modelPostfix: options.modelPostfix,
+          root: root,
+          requestPath: path + requestType.pascalCase,
+        );
       } else if (schema != null) {
         if (schema.oneOf.length == 1) {
           final oneOfRef = schema.oneOf.first.ref.getUnformattedRef();
@@ -1227,8 +1237,13 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
         return kBasicTypesMap[neededResponse.type]!;
       }
 
-      if (resolveOneOfUnion('${ref.getUnformattedRef()}\$$kResponse', neededResponse) case final union?) {
+      if (resolveOneOfUnion('${ref.getUnformattedRef()}\$$kResponse', neededResponse)
+          case final union?) {
         return union.className;
+      }
+
+      if (singleOneOfBranch(neededResponse) case final branch? when branch.hasRef) {
+        return refTypeName(branch.ref, allowEnums: false) ?? kObject.pascalCase;
       }
 
       if (neededResponse.oneOf.isNotEmpty) {
@@ -1410,16 +1425,24 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase with OneOfUnionGener
     final neededResponse = neededResponses.first;
 
     if (neededResponse.schema ?? neededResponse.content?.schema case final schema?) {
-      final unionKey = '${methodName.pascalCase}\$$kResponse';
+      final unionKey = inlineResponseKey(path, method);
       if (resolveOneOfUnion(unionKey, schema) case final union?) {
         return union.className;
       }
-      if (schema.items case final items? when resolveOneOfUnion('$unionKey\$Item', items) != null) {
+      if (resolveItemsOneOfUnion(unionKey, schema) != null) {
         return getValidatedClassName(unionKey);
       }
 
-      if (options.generateOneOfUnions && schema.oneOf.length == 1 && schema.oneOf.single.hasRef) {
-        return getValidatedClassName(schema.oneOf.single.ref.getRef()).withPostfix(modelPostfix);
+      if (singleOneOfBranch(schema) case final branch?) {
+        if (branch.hasRef) {
+          if (refTypeName(branch.ref, allowEnums: false) case final type?) {
+            return type;
+          }
+        } else if (kBasicTypesMap[branch.type] case final basic?) {
+          return basic;
+        } else if (branch.properties.isNotEmpty) {
+          return '${getValidatedClassName(unionKey)}$modelPostfix';
+        }
       }
     }
 
