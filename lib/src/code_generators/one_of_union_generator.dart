@@ -90,6 +90,23 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
 
   static const _unknown = 'Unknown';
 
+  /// Keywords of a single-branch `oneOf` that describe the `oneOf` itself, so
+  /// they aren't carried over to the branch that replaces it.
+  static const _unionKeywords = {
+    'oneOf',
+    'anyOf',
+    'allOf',
+    'discriminator',
+    'type',
+    'nullable',
+    r'$ref',
+    'properties',
+    'items',
+    'required',
+    'additionalProperties',
+    'enum',
+  };
+
   static const _shapeNames = {
     OneOfShape.map: 'Object',
     OneOfShape.list: 'Array',
@@ -139,7 +156,11 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
   /// The Dart type a `$ref` to [ref] is generated as, or `null` when it
   /// can't be used as a model type (an array, or an enum when [allowEnums] is
   /// off).
-  String? refTypeName(String ref, {bool allowEnums = true}) {
+  String? refTypeName(
+    String ref, {
+    bool allowEnums = true,
+    bool allowArrays = false,
+  }) {
     final name = ref.getUnformattedRef();
     final target = _resolveRef(ref);
     if (target == null) {
@@ -152,7 +173,7 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
       return basic;
     }
     if (target.type == 'array') {
-      return null;
+      return allowArrays ? getValidatedClassName(name) : null;
     }
     return _className(name);
   }
@@ -288,7 +309,17 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
     return branch
       ..isNullable =
           droppedNull || schema.isNullable == true || branch.isNullable == true
-      ..deprecated = schema.deprecated || branch.deprecated;
+      ..deprecated = schema.deprecated || branch.deprecated
+      ..description = branch.description.isEmpty
+          ? schema.description
+          : branch.description
+      ..defaultValue = branch.defaultValue ?? schema.defaultValue
+      ..rawJson = {
+        for (final MapEntry(:key, :value)
+            in (schema.rawJson ?? const {}).entries)
+          if (!_unionKeywords.contains(key)) key: value,
+        ...?branch.rawJson,
+      };
   }
 
   /// Whether [schema], or the items of [schema] when it is an array, is
@@ -364,12 +395,30 @@ mixin OneOfUnionGenerator on SwaggerGeneratorBase {
             : _shapeNames[shapes[index]] ?? '',
     ];
 
+    final taken = {
+      _unknown,
+      for (final name in names)
+        if (names.where((other) => other == name).length == 1) name,
+    };
     return [
-      for (final (index, name) in names.indexed)
-        names.where((other) => other == name).length > 1 || name == _unknown
-            ? '$name${names.sublist(0, index).where((other) => other == name).length + 1}'
-            : name,
+      for (final name in names)
+        if (names.where((other) => other == name).length == 1 &&
+            name != _unknown)
+          name
+        else
+          _nextFreeName(name, taken),
     ];
+  }
+
+  /// `$base1`, `$base2`, … whichever is first free in [taken], which it joins.
+  String _nextFreeName(String base, Set<String> taken) {
+    var index = 1;
+    while (taken.contains('$base$index')) {
+      index++;
+    }
+    final name = '$base$index';
+    taken.add(name);
+    return name;
   }
 
   /// Generates the sealed union class, one subclass per branch, and an
@@ -726,14 +775,17 @@ $variantClasses''';
         ambiguous &&
         union.discriminatorProperty != null &&
         variant.discriminatorValues.isNotEmpty;
-    final unique = ambiguous && !discriminated
-        ? _uniqueProperties(variant, sameShape)
+    final peers = discriminated
+        ? const <OneOfVariant>[]
+        : _requiredKeyPeers(variant, sameShape, union);
+    final unique = peers.length > 1
+        ? _uniqueProperties(variant, peers)
         : const <String>{};
-    final othersUnique = ambiguous && !discriminated
+    final othersUnique = peers.length > 1
         ? {
-            for (final other in sameShape)
+            for (final other in peers)
               if (!identical(other, variant))
-                ..._uniqueProperties(other, sameShape),
+                ..._uniqueProperties(other, peers),
           }
         : const <String>{};
 
@@ -770,11 +822,31 @@ $variantClasses''';
         variant.discriminatorValues.isNotEmpty) {
       return 1 << 20;
     }
-    return variant.requiredKeys.length * 2 +
-        variant.propertyNames.length +
-        (variant.elementType == null ? 0 : 1) +
+    return variant.requiredKeys.length * 10000 +
+        variant.propertyNames.length * 4 +
+        (variant.elementType == null ? 0 : 2) +
         (variant.allowedValues.isEmpty ? 0 : 1);
   }
+
+  /// The object branches in [sameShape] that [variant]'s required keys can't
+  /// tell it apart from: those without a discriminator value and with exactly
+  /// the same required keys, [variant] included. Branches with different
+  /// required keys are separated by those keys, most required keys first.
+  List<OneOfVariant> _requiredKeyPeers(
+    OneOfVariant variant,
+    List<OneOfVariant> sameShape,
+    OneOfUnion union,
+  ) => [
+    for (final other in sameShape)
+      if (other.shape == OneOfShape.map &&
+          (union.discriminatorProperty == null ||
+              other.discriminatorValues.isEmpty) &&
+          const SetEquality<String>().equals(
+            other.requiredKeys.toSet(),
+            variant.requiredKeys.toSet(),
+          ))
+        other,
+  ];
 
   /// Properties only [variant] declares among the object branches in
   /// [sameShape], so their presence in the JSON points to [variant].

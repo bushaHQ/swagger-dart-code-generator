@@ -157,10 +157,17 @@ String? _dateToJson(DateTime? date) {
 
   /// Unions from `generate_one_of_unions` decode from any JSON value. A union
   /// result gets the whole body, and a list of unions gets each element as is.
+  /// Like chopper's `JsonConverter`, a body that isn't JSON is passed on as
+  /// the raw string.
   static const _oneOfUnionResponse = r'''
     final Object? unionFactory = generatedMapping[ResultType];
     if (unionFactory is ResultType Function(Object?)) {
-      final body = jsonDecode(response.bodyString);
+      Object? body;
+      try {
+        body = jsonDecode(response.bodyString);
+      } on FormatException {
+        body = response.bodyString;
+      }
       return chopper.Response(response.base, body == null ? null : unionFactory(body), error: response.error);
     }
 

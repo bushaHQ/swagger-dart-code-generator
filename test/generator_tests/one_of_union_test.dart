@@ -124,10 +124,10 @@ void main() {
       );
 
       final iban = result.indexOf(
-        "final Map<String, dynamic> json when json.containsKey('iban') && json.containsKey('bic') && !json.containsKey('account_number') => Holder\$Data\$Object2(",
+        "final Map<String, dynamic> json when json.containsKey('iban') && json.containsKey('bic') => Holder\$Data\$Object2(",
       );
       final accountNumber = result.indexOf(
-        "final Map<String, dynamic> json when json.containsKey('account_number') && !json.containsKey('iban') && !json.containsKey('bic') => Holder\$Data\$Object1(",
+        "final Map<String, dynamic> json when json.containsKey('account_number') => Holder\$Data\$Object1(",
       );
       expect(iban, isNonNegative);
       expect(accountNumber, greaterThan(iban));
@@ -1107,5 +1107,321 @@ void main() {
         );
       },
     );
+  });
+
+  group('second review fixes', () {
+    Map<String, dynamic> api({
+      Map<String, dynamic> paths = const {},
+      Map<String, dynamic> schemas = const {},
+    }) => {
+      'openapi': '3.0.0',
+      'info': {'title': 'test', 'version': '1'},
+      'paths': paths,
+      'components': {'schemas': schemas},
+    };
+    Map<String, dynamic> ref(String name) => {
+      r'$ref': '#/components/schemas/$name',
+    };
+    Map<String, dynamic> json(Map<String, dynamic> schema) => {
+      '200': {
+        'description': 'ok',
+        'content': {
+          'application/json': {'schema': schema},
+        },
+      },
+    };
+    final on = GeneratorOptions(
+      inputFolder: '',
+      outputFolder: '',
+      generateOneOfUnions: true,
+    );
+    String models(Map<String, dynamic> spec, [GeneratorOptions? options]) =>
+        SwaggerModelsGeneratorV3(options ?? on).generate(
+          root: SwaggerRoot.parse(jsonEncode(spec)),
+          fileName: 'f',
+          allEnums: [],
+        );
+    String requests(Map<String, dynamic> spec) =>
+        SwaggerRequestsGenerator(on).generate(
+          swaggerRoot: SwaggerRoot.parse(jsonEncode(spec)),
+          className: 'S',
+          fileName: 's',
+          allEnums: [],
+        );
+    final cat = {
+      'type': 'object',
+      'properties': {
+        'name': {'type': 'string'},
+      },
+    };
+
+    test(
+      'lets required keys separate branches before looking at other properties',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              'Cat': {
+                'type': 'object',
+                'required': ['name'],
+                'properties': {
+                  'name': {'type': 'string'},
+                  'livesLeft': {'type': 'integer'},
+                },
+              },
+              'Dog': {
+                'type': 'object',
+                'required': ['name', 'barks'],
+                'properties': {
+                  'name': {'type': 'string'},
+                  'barks': {'type': 'boolean'},
+                },
+              },
+              'Owner': {
+                'type': 'object',
+                'properties': {
+                  'pet': {
+                    'oneOf': [ref('Cat'), ref('Dog')],
+                  },
+                },
+              },
+            },
+          ),
+        );
+
+        final dog = result.indexOf(
+          "final Map<String, dynamic> json when json.containsKey('name') && json.containsKey('barks') => Owner\$Pet\$Dog(",
+        );
+        final catGuard = result.indexOf(
+          "final Map<String, dynamic> json when json.containsKey('name') => Owner\$Pet\$Cat(",
+        );
+        expect(dog, isNonNegative);
+        expect(catGuard, greaterThan(dog));
+      },
+    );
+
+    test('types a single inline object branch of a response as its class', () {
+      final spec = api(
+        paths: {
+          '/single': {
+            'get': {
+              'responses': json({
+                'oneOf': [
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'id': {'type': 'string'},
+                    },
+                  },
+                  {'type': 'null'},
+                ],
+              }),
+            },
+          },
+        },
+      );
+
+      expect(
+        requests(spec),
+        contains('Future<chopper.Response<SingleGet\$Response>> singleGet('),
+      );
+      expect(models(spec), contains('class SingleGet\$Response{'));
+    });
+
+    test('types a single inline array branch of a response as a list', () {
+      final generated = requests(
+        api(
+          paths: {
+            '/cats': {
+              'get': {
+                'responses': json({
+                  'oneOf': [
+                    {'type': 'array', 'items': ref('Cat')},
+                    {'type': 'null'},
+                  ],
+                }),
+              },
+            },
+          },
+          schemas: {'Cat': cat},
+        ),
+      );
+
+      expect(
+        generated,
+        contains('Future<chopper.Response<List<Cat>>> catsGet('),
+      );
+      expect(
+        generated,
+        contains(
+          'generatedMapping.putIfAbsent(Cat, () => Cat.fromJsonFactory);',
+        ),
+      );
+    });
+
+    test(
+      'aliases single-branch components of arrays, and leaves enums to the old behaviour',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              'Cat': cat,
+              'Cats': {'type': 'array', 'items': ref('Cat')},
+              'MaybeCats': {
+                'oneOf': [
+                  ref('Cats'),
+                  {'type': 'null'},
+                ],
+              },
+              'Status': {
+                'type': 'string',
+                'enum': ['on', 'off'],
+              },
+              'MaybeStatus': {
+                'oneOf': [
+                  ref('Status'),
+                  {'type': 'null'},
+                ],
+              },
+            },
+          ),
+        );
+
+        expect(result, contains('typedef MaybeCats = Cats;'));
+        expect(result, isNot(contains('typedef MaybeStatus')));
+      },
+    );
+
+    test('numbers repeated variant names without collisions', () {
+      final result = models(
+        api(
+          schemas: {
+            'Cat': cat,
+            'Cat2': cat,
+            'Holder': {
+              'type': 'object',
+              'properties': {
+                'pet': {
+                  'oneOf': [ref('Cat'), ref('Cat2'), ref('Cat')],
+                },
+              },
+            },
+          },
+        ),
+      );
+
+      expect(result, contains('final class Holder\$Pet\$Cat1 extends'));
+      expect(result, contains('final class Holder\$Pet\$Cat2 extends'));
+      expect(result, contains('final class Holder\$Pet\$Cat3 extends'));
+    });
+
+    test(
+      'keeps the outer property keywords and nullable scalars when collapsing',
+      () {
+        final result = models(
+          api(
+            schemas: {
+              'Holder': {
+                'type': 'object',
+                'properties': {
+                  'note': {
+                    'oneOf': [
+                      {'type': 'string'},
+                      {'type': 'null'},
+                    ],
+                    'x-deprecated-message': 'old',
+                  },
+                  'ids': {
+                    'type': 'array',
+                    'items': {
+                      'oneOf': [
+                        {'type': 'integer'},
+                        {'type': 'null'},
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          ),
+          GeneratorOptions(
+            inputFolder: '',
+            outputFolder: '',
+            generateOneOfUnions: true,
+            customAnnotations: [
+              CustomAnnotationMap(
+                typeName: 'Deprecated',
+                swaggerKey: 'x-deprecated-message',
+              ),
+            ],
+          ),
+        );
+
+        expect(result, contains("@Deprecated('old')"));
+        expect(result, contains('final List<int?>? ids;'));
+      },
+    );
+
+    test(
+      'generates enums for unions inside the items of an array response',
+      () {
+        final spec = jsonEncode(
+          api(
+            paths: {
+              '/orders': {
+                'get': {
+                  'responses': json({
+                    'type': 'array',
+                    'items': {
+                      'type': 'object',
+                      'properties': {
+                        'pay_with': {
+                          'oneOf': [
+                            {
+                              'type': 'object',
+                              'properties': {
+                                'the_mode': {
+                                  'type': 'string',
+                                  'enum': ['card', 'bank'],
+                                },
+                              },
+                            },
+                            {'type': 'string'},
+                          ],
+                        },
+                      },
+                    },
+                  }),
+                },
+              },
+            },
+          ),
+        );
+
+        final enums = SwaggerEnumsGeneratorV3(
+          on,
+        ).generateAllEnums(root: SwaggerRoot.parse(spec), fileName: 'f');
+        final generated = SwaggerModelsGeneratorV3(on).generate(
+          root: SwaggerRoot.parse(spec),
+          fileName: 'f',
+          allEnums: enums,
+        );
+        final referenced = RegExp(
+          r'enums\.([A-Za-z0-9_$]+)',
+        ).allMatches(generated).map((m) => m.group(1)).toSet();
+
+        expect(referenced, isNotEmpty);
+        expect(enums.map((e) => e.name), containsAll(referenced));
+      },
+    );
+
+    test('passes a body that is not JSON to union responses as text', () {
+      final converter = SwaggerAdditionsGenerator(
+        on,
+      ).generateCustomJsonConverter('s');
+
+      expect(converter, contains('on FormatException {'));
+      expect(converter, contains('body = response.bodyString;'));
+    });
   });
 }

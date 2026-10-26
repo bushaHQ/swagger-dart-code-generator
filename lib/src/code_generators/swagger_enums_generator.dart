@@ -394,6 +394,19 @@ ${allEnums.map((e) => e.toString()).join('\n')}
           if (enumModel != null) {
             result.add(enumModel);
           }
+
+          final unionKey = '$className\$Item\$${key.pascalCase}';
+          final union =
+              resolveOneOfUnion(unionKey, value) ??
+              resolveItemsOneOfUnion(unionKey, value);
+          if (union != null) {
+            for (final MapEntry(key: innerKey, value: innerSchema)
+                in union.innerClasses.entries) {
+              result.addAll(
+                generateEnumsFromClasses(innerKey, innerSchema, schemas),
+              );
+            }
+          }
         });
 
         return result;

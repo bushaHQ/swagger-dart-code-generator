@@ -59,11 +59,9 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
     }
 
     if (singleOneOfBranch(schema) case final branch? when branch.hasRef) {
-      return switch (refTypeName(branch.ref)) {
-        final type? =>
-          'typedef ${getValidatedClassName(className)}${options.modelPostfix} = $type;',
-        null => '',
-      };
+      if (refTypeName(branch.ref, allowEnums: false, allowArrays: true) case final type?) {
+        return 'typedef ${getValidatedClassName(className)}${options.modelPostfix} = $type;';
+      }
     }
 
     if (schema.ref.isNotEmpty) {
@@ -1374,7 +1372,7 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
       final union? => union.className,
       null => null,
     };
-    final typeName =
+    final listItemTypeName =
         itemsUnionType ??
         _generateListPropertyTypeName(
           allEnumListNames: allEnumListNames,
@@ -1385,6 +1383,13 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
           prop: prop,
           propertyName: propertyName,
         );
+    final typeName =
+        options.generateOneOfUnions &&
+            itemsUnion == null &&
+            prop.items?.isNullable == true &&
+            const {'String', 'int', 'double', 'num', 'bool'}.contains(listItemTypeName)
+        ? '$listItemTypeName?'
+        : listItemTypeName;
 
     final unknownEnumValue = generateEnumValue(
       allEnumNames: allEnumNames,
