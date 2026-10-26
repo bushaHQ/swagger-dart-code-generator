@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:recase/recase.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/constants.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/enum_model.dart';
+import 'package:swagger_dart_code_generator/src/code_generators/one_of_union_generator.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_generator_base.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/swagger_requests_generator.dart';
 import 'package:swagger_dart_code_generator/src/exception_words.dart';
@@ -10,7 +11,8 @@ import 'package:swagger_dart_code_generator/src/models/generator_options.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/responses/swagger_schema.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart';
 
-abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
+abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase
+    with OneOfUnionGenerator {
   final GeneratorOptions _options;
 
   @override
@@ -50,6 +52,10 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
 
     if (schema.isEnum) {
       return '';
+    }
+
+    if (resolveOneOfUnion(className, schema) case final union?) {
+      return generateOneOfUnionClass(union);
     }
 
     if (schema.ref.isNotEmpty) {
@@ -151,6 +157,10 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
     final result = <String, SwaggerSchema>{};
 
     classes.forEach((classKey, schema) {
+      if (resolveOneOfUnion(classKey, schema) case final union?) {
+        result.addAll(union.innerClasses);
+      }
+
       final properties = {
         ...schema.properties,
         ...schema.items?.properties ?? {},
@@ -174,6 +184,12 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
         final innerClassName = getValidatedClassName(
           '${getValidatedClassName(classKey)}$itemPart${getValidatedClassName(propertyKey)}',
         );
+
+        if (resolveOneOfUnion(innerClassName, propSchema) case final union?) {
+          result[innerClassName] = propSchema;
+          result.addAll(union.innerClasses);
+          return;
+        }
 
         if (propSchema.properties.isNotEmpty) {
           result[innerClassName] = propSchema;
@@ -295,6 +311,8 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
         : '';
 
     final allEnumListNames = getAllListEnumNames(root);
+
+    oneOfClasses = classes;
 
     final classesFromResponses = getClassesFromResponses(root);
     classes.addAll(classesFromResponses);
@@ -1467,6 +1485,27 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     return '\t$jsonConverterAnnotation$jsonKeyContent$isDeprecatedContent$jsonCustomAnnotationContent  final $typeName $propertyName;${unknownEnumValue.fromJson}';
   }
 
+  String generatePropertyContentByOneOf({
+    required OneOfUnion union,
+    required SwaggerSchema prop,
+    required String propertyName,
+    required String propertyKey,
+    required String className,
+    required List<String> requiredProperties,
+  }) {
+    final includeIfNullString = generateIncludeIfNullString(prop);
+    final deprecatedContent = prop.deprecated ? kDeprecatedAnnotation : '';
+
+    var typeName = union.className;
+    if (prop.shouldBeNullable ||
+        options.nullableModels.contains(className) ||
+        !requiredProperties.contains(propertyKey)) {
+      typeName = typeName.makeNullable();
+    }
+
+    return "\t@JsonKey(name: '${_validatePropertyKey(propertyKey)}'$includeIfNullString)\n$deprecatedContent  final $typeName $propertyName;";
+  }
+
   String generatePropertyContentByType(
     SwaggerSchema prop,
     String propertyName,
@@ -1572,7 +1611,21 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
       propertyName = getParameterName(propertyName, propertyNames);
 
       propertyNames.add(propertyName);
-      if (prop.type.isNotEmpty) {
+      final unionKey = getValidatedClassName(
+        '${getValidatedClassName(className)}\$${getValidatedClassName(propertyKey)}',
+      );
+      if (resolveOneOfUnion(unionKey, prop) case final union?) {
+        results.add(
+          generatePropertyContentByOneOf(
+            union: union,
+            prop: prop,
+            propertyName: propertyName,
+            propertyKey: propertyKey,
+            className: className,
+            requiredProperties: requiredProperties,
+          ),
+        );
+      } else if (prop.type.isNotEmpty) {
         results.add(
           generatePropertyContentByType(
             prop,
